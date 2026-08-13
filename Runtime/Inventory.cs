@@ -1,0 +1,1221 @@
+using System;
+using System.Collections;
+using System.Collections.Generic;
+
+namespace GI.UnityToolkit.Items
+{
+    /// <summary>
+    /// A slot-based container of <typeparamref name="TItem"/>. Every slot is an
+    /// <see cref="ItemStack{TItem}"/> holding an item and a quantity; the inventory, not the item,
+    /// owns quantity.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Two modes.</b> When <see cref="MaxSlotCount"/> is null the inventory is
+    /// <i>unbounded</i>: it grows on demand, holds no empty slots, and removing a stack removes the
+    /// slot (later indices shift down). When <see cref="MaxSlotCount"/> is set the inventory is
+    /// <i>fixed size</i>: exactly that many slots exist for its lifetime, emptied slots persist and
+    /// keep their index, and <see cref="Compact"/> is needed to close gaps.</para>
+    /// <para><b>Atomicity.</b> Methods named <c>Try*</c> are all-or-nothing: on failure they mutate
+    /// nothing and fire no events. Methods named <c>*UpTo</c> and <see cref="AddRange"/> are
+    /// best-effort and report how much they achieved.</para>
+    /// <para><b>Unity serialization.</b> This type is deliberately NOT marked
+    /// <see cref="SerializableAttribute"/> and cannot round-trip through Unity's serializer. Persist
+    /// an inventory through an explicit save DTO instead - the real save key is an item's
+    /// <see cref="IItemAttributes.UniqueId"/>, not its object graph.</para>
+    /// </remarks>
+    /// <typeparam name="TItem">The item type this inventory holds.</typeparam>
+    public class Inventory<TItem> : IEnumerable<TItem> where TItem : Item
+    {
+        /// <summary>
+        /// Signature for events that report an item and a number of units.
+        /// </summary>
+        public delegate void ItemQuantityDelegate(TItem item, int quantity);
+
+        /// <summary>
+        /// Signature for events that report a slot index.
+        /// </summary>
+        public delegate void SlotDelegate(int index);
+
+        private readonly List<ItemStack<TItem>> _slots;
+        private readonly List<Action> _pendingItemEvents = new();
+        private readonly SortedSet<int> _pendingSlotChanged = new();
+        private bool _pendingInventoryUpdated;
+        private int _batchDepth;
+
+        /// <summary>
+        /// Raised once per logical add with the item and the total units added, even when those units
+        /// span several slots. Never raised for a failed or zero-unit add.
+        /// </summary>
+        public event ItemQuantityDelegate OnItemAdded;
+
+        /// <summary>
+        /// Raised once per logical removal with the item and the total units removed, even when those
+        /// units came from several slots. <see cref="Clear"/> raises it once per distinct stack cleared.
+        /// </summary>
+        public event ItemQuantityDelegate OnItemRemoved;
+
+        /// <summary>
+        /// Raised once for each slot index whose contents changed, in ascending index order.
+        /// Coalesced within a batch, so a slot touched repeatedly reports once.
+        /// </summary>
+        public event SlotDelegate OnSlotChanged;
+
+        /// <summary>
+        /// Raised exactly once at the end of any operation that changed the inventory. Bulk
+        /// operations and a caller's <see cref="BeginBatchUpdate"/> scope raise it once, not once
+        /// per slot.
+        /// </summary>
+        public event Action OnInventoryUpdated;
+
+        /// <summary>
+        /// Constructs an inventory.
+        /// </summary>
+        /// <param name="maxSlotCount">Fixed slot count, or null for an unbounded, self-compacting inventory.</param>
+        /// <param name="allowDuplicates">
+        /// When false, at most one slot may hold any given <see cref="IItemAttributes.UniqueId"/>.
+        /// </param>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="maxSlotCount"/> is zero or negative.</exception>
+        public Inventory(int? maxSlotCount = null, bool allowDuplicates = true)
+        {
+            if (maxSlotCount is <= 0) throw new ArgumentOutOfRangeException(nameof(maxSlotCount));
+
+            MaxSlotCount = maxSlotCount;
+            AllowDuplicates = allowDuplicates;
+            _slots = new List<ItemStack<TItem>>();
+
+            if (maxSlotCount.HasValue)
+            {
+                for (var i = 0; i < maxSlotCount.Value; i++) _slots.Add(new ItemStack<TItem>());
+            }
+        }
+
+        /// <summary>
+        /// Fixed slot count, or null when unbounded.
+        /// </summary>
+        public int? MaxSlotCount { get; }
+
+        /// <summary>
+        /// When false, at most one slot may hold any given <see cref="IItemAttributes.UniqueId"/>.
+        /// Because a slot and a stack are the same thing here, this means one <i>stack</i> per kind:
+        /// a stackable item may still fill that single stack to its <see cref="Item.StackLimit"/>,
+        /// but may never overflow into a second slot.
+        /// </summary>
+        public bool AllowDuplicates { get; }
+
+        /// <summary>
+        /// True when <see cref="MaxSlotCount"/> is set.
+        /// </summary>
+        public bool IsFixedSize => MaxSlotCount.HasValue;
+
+        /// <summary>
+        /// Live read-only view of every slot in index order. In fixed-size mode this includes empty
+        /// slots and always has <see cref="MaxSlotCount"/> entries; in unbounded mode it contains no
+        /// empty slots.
+        /// </summary>
+        public IReadOnlyList<ItemStack<TItem>> Slots => _slots;
+
+        /// <summary>
+        /// Gets the slot at <paramref name="index"/>. Never null; may be empty.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="index"/> is not a valid slot index.</exception>
+        public ItemStack<TItem> this[int index]
+        {
+            get
+            {
+                EnsureValidIndex(index);
+                return _slots[index];
+            }
+        }
+
+        /// <summary>
+        /// Number of slots that currently exist. Equals <see cref="MaxSlotCount"/> when fixed size.
+        /// </summary>
+        public int SlotCount => _slots.Count;
+
+        /// <summary>
+        /// Number of slots holding an item.
+        /// </summary>
+        public int FilledSlotCount
+        {
+            get
+            {
+                var count = 0;
+                for (var i = 0; i < _slots.Count; i++)
+                {
+                    if (!_slots[i].IsEmpty) count++;
+                }
+
+                return count;
+            }
+        }
+
+        /// <summary>
+        /// Number of empty slots, or null when unbounded.
+        /// </summary>
+        public int? FreeSlotCount => IsFixedSize ? MaxSlotCount.Value - FilledSlotCount : null;
+
+        /// <summary>
+        /// True when no slot holds an item.
+        /// </summary>
+        public bool IsEmpty
+        {
+            get
+            {
+                for (var i = 0; i < _slots.Count; i++)
+                {
+                    if (!_slots[i].IsEmpty) return false;
+                }
+
+                return true;
+            }
+        }
+
+        /// <summary>
+        /// True when no <i>slot</i> is free. Always false when unbounded. A full inventory may still
+        /// accept units of an item that stacks with an existing partial stack, so gate adds on
+        /// <see cref="CanAdd"/> or <see cref="GetFreeSpaceFor"/>, never on this.
+        /// </summary>
+        public bool IsFull => IsFixedSize && FilledSlotCount >= MaxSlotCount.Value;
+
+        /// <summary>
+        /// Total units held across all stacks.
+        /// </summary>
+        public int TotalQuantity
+        {
+            get
+            {
+                var total = 0;
+                for (var i = 0; i < _slots.Count; i++) total += _slots[i].Quantity;
+                return total;
+            }
+        }
+
+        /// <summary>
+        /// Whether <paramref name="index"/> addresses an existing slot.
+        /// </summary>
+        public bool IsValidIndex(int index) => index >= 0 && index < _slots.Count;
+
+        /// <summary>
+        /// Units of <paramref name="item"/> that could be added right now, honouring stacking, slot
+        /// capacity, <see cref="AllowDuplicates"/>, and <see cref="CanAcceptItem"/>. Returns
+        /// <see cref="int.MaxValue"/> when unbounded and accepted, and 0 for a null or rejected item.
+        /// </summary>
+        /// <remarks><see cref="TryAdd(TItem,int)"/> succeeds if and only if its quantity is positive
+        /// and at most this value (plus the non-stackable rule described there).</remarks>
+        public int GetFreeSpaceFor(TItem item)
+        {
+            if (item == null || !CanAcceptItem(item)) return 0;
+
+            long existingSpace = 0;
+            var hasExistingStackOfKind = false;
+
+            for (var i = 0; i < _slots.Count; i++)
+            {
+                var slot = _slots[i];
+                if (slot.IsEmpty) continue;
+                if (!string.Equals(slot.Item.UniqueId, item.UniqueId, StringComparison.Ordinal)) continue;
+
+                hasExistingStackOfKind = true;
+                if (item.CanStackWith(slot.Item)) existingSpace += slot.RemainingSpace;
+            }
+
+            if (!AllowDuplicates)
+            {
+                if (hasExistingStackOfKind) return (int)Math.Min(existingSpace, int.MaxValue);
+                if (IsFixedSize && FreeSlotCount <= 0) return 0;
+                return item.StackLimit;
+            }
+
+            if (!IsFixedSize) return int.MaxValue;
+
+            var newSlotsSpace = (long)FreeSlotCount.GetValueOrDefault() * item.StackLimit;
+            return (int)Math.Min(existingSpace + newSlotsSpace, int.MaxValue);
+        }
+
+        /// <summary>
+        /// Whether <see cref="TryAdd(TItem,int)"/> would succeed with these arguments.
+        /// </summary>
+        public bool CanAdd(TItem item, int quantity = 1)
+        {
+            if (item == null || quantity <= 0) return false;
+            if (item.StackLimit <= 1 && quantity > 1) return false;
+            return quantity <= GetFreeSpaceFor(item);
+        }
+
+        /// <summary>
+        /// Adds exactly <paramref name="quantity"/> units of <paramref name="item"/>, or nothing.
+        /// </summary>
+        /// <returns>True when the full quantity was added.</returns>
+        /// <remarks>
+        /// Fills partial stacks of matching items in ascending slot order first, then consumes empty
+        /// slots. Atomic: if the full quantity does not fit, no slot is touched and no event fires.
+        /// <para>
+        /// A non-stackable item (<see cref="Item.StackLimit"/> of 1) is rejected when
+        /// <paramref name="quantity"/> exceeds 1, because each such slot needs its own instance and
+        /// this method has only one to give. Use <see cref="AddRange"/> with distinct instances.
+        /// </para>
+        /// </remarks>
+        public bool TryAdd(TItem item, int quantity = 1) => TryAdd(item, quantity, out _);
+
+        /// <param name="remainder">0 on success; the full requested quantity on failure.</param>
+        /// <inheritdoc cref="TryAdd(TItem,int)"/>
+        public bool TryAdd(TItem item, int quantity, out int remainder)
+        {
+            remainder = quantity;
+            if (!CanAdd(item, quantity)) return false;
+
+            using (BeginBatchUpdate())
+            {
+                ApplyAdd(item, quantity);
+            }
+
+            remainder = 0;
+            return true;
+        }
+
+        /// <summary>
+        /// Adds as many of <paramref name="quantity"/> units as fit. Adds at most 1 unit of a
+        /// non-stackable item, for the reason given on <see cref="TryAdd(TItem,int)"/>.
+        /// </summary>
+        /// <returns>Units actually added, 0 to <paramref name="quantity"/>.</returns>
+        public int AddUpTo(TItem item, int quantity)
+        {
+            if (item == null || quantity <= 0 || !CanAcceptItem(item)) return 0;
+
+            var effectiveQuantity = item.StackLimit <= 1 ? Math.Min(quantity, 1) : quantity;
+            var available = GetFreeSpaceFor(item);
+            var toAdd = (int)Math.Min((long)effectiveQuantity, (long)available);
+            if (toAdd <= 0) return 0;
+
+            using (BeginBatchUpdate())
+            {
+                ApplyAdd(item, toAdd);
+            }
+
+            return toAdd;
+        }
+
+        /// <summary>
+        /// Adds one unit of each item in <paramref name="items"/>, best effort, in sequence order, as
+        /// a single batch. Null entries are skipped and reported in <paramref name="notAdded"/>.
+        /// </summary>
+        /// <param name="notAdded">Items that did not fit. Empty when every item was added.</param>
+        /// <returns>Number of items added.</returns>
+        /// <exception cref="ArgumentNullException"><paramref name="items"/> is null.</exception>
+        public int AddRange(IEnumerable<TItem> items, out IReadOnlyList<TItem> notAdded)
+        {
+            if (items == null) throw new ArgumentNullException(nameof(items));
+
+            var failed = new List<TItem>();
+            var addedCount = 0;
+
+            using (BeginBatchUpdate())
+            {
+                foreach (var item in items)
+                {
+                    if (item != null && TryAdd(item))
+                    {
+                        addedCount++;
+                    }
+                    else
+                    {
+                        failed.Add(item);
+                    }
+                }
+            }
+
+            notAdded = failed;
+            return addedCount;
+        }
+
+        /// <summary>
+        /// Whether <see cref="TryRemove(TItem,int)"/> would succeed with these arguments.
+        /// </summary>
+        public bool CanRemove(TItem item, int quantity = 1)
+        {
+            if (item == null || quantity <= 0) return false;
+            return GetQuantity(item) >= quantity;
+        }
+
+        /// <summary>
+        /// Removes exactly <paramref name="quantity"/> units matching <paramref name="item"/>'s
+        /// <see cref="IItemAttributes.UniqueId"/>, or nothing. Draining proceeds in ascending slot
+        /// order. Matches by kind, not by reference - use <see cref="TryRemoveInstance"/> for that.
+        /// </summary>
+        /// <returns>True when the full quantity was removed.</returns>
+        public bool TryRemove(TItem item, int quantity = 1) => TryRemove(item, quantity, out _);
+
+        /// <param name="remainder">0 on success; the full requested quantity on failure.</param>
+        /// <inheritdoc cref="TryRemove(TItem,int)"/>
+        public bool TryRemove(TItem item, int quantity, out int remainder)
+        {
+            remainder = quantity;
+            if (item == null) return false;
+            return TryRemove(item.UniqueId, quantity, out remainder);
+        }
+
+        /// <inheritdoc cref="TryRemove(TItem,int,out int)"/>
+        public bool TryRemove(string uniqueId, int quantity, out int remainder)
+        {
+            remainder = quantity;
+            if (string.IsNullOrEmpty(uniqueId) || quantity <= 0) return false;
+            if (GetQuantity(uniqueId) < quantity) return false;
+
+            using (BeginBatchUpdate())
+            {
+                ApplyRemoveByKind(uniqueId, quantity);
+            }
+
+            remainder = 0;
+            return true;
+        }
+
+        /// <summary>
+        /// Removes as many of <paramref name="quantity"/> units as are held.
+        /// </summary>
+        /// <returns>Units actually removed.</returns>
+        public int RemoveUpTo(TItem item, int quantity) => item == null ? 0 : RemoveUpTo(item.UniqueId, quantity);
+
+        /// <inheritdoc cref="RemoveUpTo(TItem,int)"/>
+        public int RemoveUpTo(string uniqueId, int quantity)
+        {
+            if (string.IsNullOrEmpty(uniqueId) || quantity <= 0) return 0;
+
+            var toRemove = Math.Min(quantity, GetQuantity(uniqueId));
+            if (toRemove <= 0) return 0;
+
+            using (BeginBatchUpdate())
+            {
+                ApplyRemoveByKind(uniqueId, toRemove);
+            }
+
+            return toRemove;
+        }
+
+        /// <summary>
+        /// Removes the entire stack holding this exact object reference. Does nothing if the
+        /// instance is not held.
+        /// </summary>
+        public bool TryRemoveInstance(TItem item)
+        {
+            if (item == null) return false;
+            var index = IndexOf(item);
+            if (index < 0) return false;
+
+            using (BeginBatchUpdate())
+            {
+                var slot = _slots[index];
+                var removedItem = slot.Item;
+                var removedQuantity = slot.Quantity;
+                slot.Clear();
+
+                if (IsFixedSize)
+                {
+                    MarkSlotChanged(index);
+                }
+                else
+                {
+                    _slots.RemoveAt(index);
+                    for (var j = index; j < _slots.Count; j++) MarkSlotChanged(j);
+                }
+
+                EnqueueItemRemoved(removedItem, removedQuantity);
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Removes the entire stack at <paramref name="index"/>.
+        /// </summary>
+        /// <param name="item">The item removed, or null when the slot was empty.</param>
+        /// <param name="quantity">Units removed, or 0 when the slot was empty.</param>
+        /// <returns>False when the slot was already empty.</returns>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="index"/> is not a valid slot index.</exception>
+        public bool TryRemoveAt(int index, out TItem item, out int quantity)
+        {
+            EnsureValidIndex(index);
+            var slot = _slots[index];
+            if (slot.IsEmpty)
+            {
+                item = null;
+                quantity = 0;
+                return false;
+            }
+
+            item = slot.Item;
+            quantity = slot.Quantity;
+
+            using (BeginBatchUpdate())
+            {
+                slot.Clear();
+
+                if (IsFixedSize)
+                {
+                    MarkSlotChanged(index);
+                }
+                else
+                {
+                    _slots.RemoveAt(index);
+                    for (var j = index; j < _slots.Count; j++) MarkSlotChanged(j);
+                }
+
+                EnqueueItemRemoved(item, quantity);
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Removes exactly <paramref name="quantity"/> units from the stack at
+        /// <paramref name="index"/>, clearing the slot if that empties it. Atomic: fails without
+        /// mutating when the slot holds fewer units than requested.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="index"/> is not a valid slot index.</exception>
+        public bool TryRemoveAt(int index, int quantity)
+        {
+            EnsureValidIndex(index);
+            if (quantity <= 0) return false;
+
+            var slot = _slots[index];
+            if (slot.IsEmpty || slot.Quantity < quantity) return false;
+
+            using (BeginBatchUpdate())
+            {
+                var item = slot.Item;
+                slot.Remove(quantity);
+
+                if (slot.IsEmpty && !IsFixedSize)
+                {
+                    _slots.RemoveAt(index);
+                    for (var j = index; j < _slots.Count; j++) MarkSlotChanged(j);
+                }
+                else
+                {
+                    MarkSlotChanged(index);
+                }
+
+                EnqueueItemRemoved(item, quantity);
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Empties every slot. Fixed-size inventories keep their slot count; unbounded inventories
+        /// drop to zero slots. Raises <see cref="OnItemRemoved"/> once per cleared stack and
+        /// <see cref="OnInventoryUpdated"/> once. Does nothing and fires nothing when already empty.
+        /// </summary>
+        public void Clear()
+        {
+            if (IsEmpty) return;
+
+            using (BeginBatchUpdate())
+            {
+                for (var i = _slots.Count - 1; i >= 0; i--)
+                {
+                    var slot = _slots[i];
+                    if (slot.IsEmpty) continue;
+
+                    var item = slot.Item;
+                    var quantity = slot.Quantity;
+                    slot.Clear();
+                    EnqueueItemRemoved(item, quantity);
+
+                    if (IsFixedSize) MarkSlotChanged(i);
+                }
+
+                if (!IsFixedSize) _slots.Clear();
+            }
+        }
+
+        /// <summary>
+        /// The items held, in slot order, skipping empty slots. Equivalent to iterating the
+        /// inventory directly with <c>foreach</c>.
+        /// </summary>
+        public IEnumerable<TItem> Items
+        {
+            get
+            {
+                for (var i = 0; i < _slots.Count; i++)
+                {
+                    if (!_slots[i].IsEmpty) yield return _slots[i].Item;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Whether this exact object reference occupies a slot.
+        /// </summary>
+        public bool Contains(TItem item) => item != null && IndexOf(item) >= 0;
+
+        /// <summary>
+        /// Whether any slot holds an item with this <see cref="IItemAttributes.UniqueId"/>.
+        /// </summary>
+        public bool Contains(string uniqueId) => !string.IsNullOrEmpty(uniqueId) && IndexOf(uniqueId) >= 0;
+
+        /// <summary>
+        /// Whether any held item satisfies <paramref name="predicate"/>.
+        /// </summary>
+        /// <exception cref="ArgumentNullException"><paramref name="predicate"/> is null.</exception>
+        public bool Contains(Func<TItem, bool> predicate)
+        {
+            if (predicate == null) throw new ArgumentNullException(nameof(predicate));
+            foreach (var item in Items)
+            {
+                if (predicate(item)) return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Total units held whose <see cref="IItemAttributes.UniqueId"/> matches <paramref name="item"/>'s.
+        /// </summary>
+        public int GetQuantity(TItem item) => item == null ? 0 : GetQuantity(item.UniqueId);
+
+        /// <summary>
+        /// Total units held with this <see cref="IItemAttributes.UniqueId"/>.
+        /// </summary>
+        public int GetQuantity(string uniqueId)
+        {
+            if (string.IsNullOrEmpty(uniqueId)) return 0;
+
+            var total = 0;
+            for (var i = 0; i < _slots.Count; i++)
+            {
+                var slot = _slots[i];
+                if (!slot.IsEmpty && string.Equals(slot.Item.UniqueId, uniqueId, StringComparison.Ordinal))
+                {
+                    total += slot.Quantity;
+                }
+            }
+
+            return total;
+        }
+
+        /// <summary>
+        /// Total units held in stacks whose item satisfies <paramref name="predicate"/>.
+        /// </summary>
+        /// <exception cref="ArgumentNullException"><paramref name="predicate"/> is null.</exception>
+        public int GetQuantity(Func<TItem, bool> predicate)
+        {
+            if (predicate == null) throw new ArgumentNullException(nameof(predicate));
+
+            var total = 0;
+            for (var i = 0; i < _slots.Count; i++)
+            {
+                var slot = _slots[i];
+                if (!slot.IsEmpty && predicate(slot.Item)) total += slot.Quantity;
+            }
+
+            return total;
+        }
+
+        /// <summary>
+        /// Number of occupied slots holding this <see cref="IItemAttributes.UniqueId"/>.
+        /// </summary>
+        public int GetSlotCount(string uniqueId)
+        {
+            if (string.IsNullOrEmpty(uniqueId)) return 0;
+
+            var count = 0;
+            for (var i = 0; i < _slots.Count; i++)
+            {
+                var slot = _slots[i];
+                if (!slot.IsEmpty && string.Equals(slot.Item.UniqueId, uniqueId, StringComparison.Ordinal)) count++;
+            }
+
+            return count;
+        }
+
+        /// <summary>
+        /// Finds the first held item satisfying <paramref name="predicate"/>, in slot order.
+        /// </summary>
+        /// <exception cref="ArgumentNullException"><paramref name="predicate"/> is null.</exception>
+        public bool TryFind(Func<TItem, bool> predicate, out TItem item)
+        {
+            if (predicate == null) throw new ArgumentNullException(nameof(predicate));
+
+            foreach (var candidate in Items)
+            {
+                if (!predicate(candidate)) continue;
+                item = candidate;
+                return true;
+            }
+
+            item = null;
+            return false;
+        }
+
+        /// <summary>
+        /// All held items satisfying <paramref name="predicate"/>, lazily, in slot order.
+        /// </summary>
+        /// <exception cref="ArgumentNullException"><paramref name="predicate"/> is null.</exception>
+        public IEnumerable<TItem> FindAll(Func<TItem, bool> predicate)
+        {
+            if (predicate == null) throw new ArgumentNullException(nameof(predicate));
+            return FindAllIterator(predicate);
+        }
+
+        private IEnumerable<TItem> FindAllIterator(Func<TItem, bool> predicate)
+        {
+            foreach (var item in Items)
+            {
+                if (predicate(item)) yield return item;
+            }
+        }
+
+        /// <summary>
+        /// Finds the held item with this <see cref="Item.InstanceId"/>.
+        /// </summary>
+        public bool TryFindByInstanceId(Guid instanceId, out TItem item)
+        {
+            foreach (var candidate in Items)
+            {
+                if (candidate.InstanceId != instanceId) continue;
+                item = candidate;
+                return true;
+            }
+
+            item = null;
+            return false;
+        }
+
+        /// <summary>
+        /// Slot index of this exact object reference, or -1.
+        /// </summary>
+        public int IndexOf(TItem item)
+        {
+            if (item == null) return -1;
+
+            for (var i = 0; i < _slots.Count; i++)
+            {
+                var slot = _slots[i];
+                if (!slot.IsEmpty && ReferenceEquals(slot.Item, item)) return i;
+            }
+
+            return -1;
+        }
+
+        /// <summary>
+        /// Lowest slot index holding this <see cref="IItemAttributes.UniqueId"/>, or -1.
+        /// </summary>
+        public int IndexOf(string uniqueId)
+        {
+            if (string.IsNullOrEmpty(uniqueId)) return -1;
+
+            for (var i = 0; i < _slots.Count; i++)
+            {
+                var slot = _slots[i];
+                if (!slot.IsEmpty && string.Equals(slot.Item.UniqueId, uniqueId, StringComparison.Ordinal)) return i;
+            }
+
+            return -1;
+        }
+
+        /// <summary>
+        /// Slot index of the item with this <see cref="Item.InstanceId"/>, or -1.
+        /// </summary>
+        public int IndexOfInstance(Guid instanceId)
+        {
+            for (var i = 0; i < _slots.Count; i++)
+            {
+                var slot = _slots[i];
+                if (!slot.IsEmpty && slot.Item.InstanceId == instanceId) return i;
+            }
+
+            return -1;
+        }
+
+        /// <summary>
+        /// Lowest slot index whose item satisfies <paramref name="predicate"/>.
+        /// </summary>
+        /// <exception cref="ArgumentNullException"><paramref name="predicate"/> is null.</exception>
+        public bool TryGetSlotIndex(Func<TItem, bool> predicate, out int index)
+        {
+            if (predicate == null) throw new ArgumentNullException(nameof(predicate));
+
+            for (var i = 0; i < _slots.Count; i++)
+            {
+                var slot = _slots[i];
+                if (!slot.IsEmpty && predicate(slot.Item))
+                {
+                    index = i;
+                    return true;
+                }
+            }
+
+            index = -1;
+            return false;
+        }
+
+        /// <summary>
+        /// Enumerates the items held, in slot order, skipping empty slots.
+        /// </summary>
+        public IEnumerator<TItem> GetEnumerator() => Items.GetEnumerator();
+
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+
+        /// <summary>
+        /// Exchanges the contents of two slots. Returns false for equal indices, changing nothing.
+        /// Slot objects are not replaced, so UI bindings survive.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">Either index is not a valid slot index.</exception>
+        public bool Swap(int indexA, int indexB)
+        {
+            EnsureValidIndex(indexA);
+            EnsureValidIndex(indexB);
+            if (indexA == indexB) return false;
+
+            var slotA = _slots[indexA];
+            var slotB = _slots[indexB];
+            if (slotA.IsEmpty && slotB.IsEmpty) return false;
+
+            using (BeginBatchUpdate())
+            {
+                slotA.SwapWith(slotB);
+                MarkSlotChanged(indexA);
+                MarkSlotChanged(indexB);
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Moves the stack at <paramref name="fromIndex"/> to <paramref name="toIndex"/>. The
+        /// drag-and-drop primitive. Three cases: an empty destination receives the stack; a
+        /// destination holding a stackable match with room absorbs as much as fits, leaving any
+        /// remainder in the source; any other occupied destination is swapped with.
+        /// </summary>
+        /// <returns>False for equal indices, an empty source, or when nothing changed.</returns>
+        /// <exception cref="ArgumentOutOfRangeException">Either index is not a valid slot index.</exception>
+        public bool Move(int fromIndex, int toIndex)
+        {
+            EnsureValidIndex(fromIndex);
+            EnsureValidIndex(toIndex);
+            if (fromIndex == toIndex) return false;
+
+            var source = _slots[fromIndex];
+            if (source.IsEmpty) return false;
+
+            var destination = _slots[toIndex];
+
+            using (BeginBatchUpdate())
+            {
+                if (destination.IsEmpty)
+                {
+                    destination.Set(source.Item, source.Quantity);
+                    source.Clear();
+                }
+                else if (source.Item.CanStackWith(destination.Item) && destination.RemainingSpace > 0)
+                {
+                    var moved = destination.Add(source.Quantity);
+                    source.Remove(moved);
+                }
+                else
+                {
+                    source.SwapWith(destination);
+                }
+
+                MarkSlotChanged(fromIndex);
+                MarkSlotChanged(toIndex);
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Moves <paramref name="quantity"/> units out of the stack at <paramref name="index"/> into
+        /// the first empty slot (fixed size) or a newly appended slot (unbounded).
+        /// </summary>
+        /// <returns>
+        /// False when the quantity is non-positive or not strictly less than the stack's quantity
+        /// (at least one unit must remain), the slot is empty, no slot is available, or
+        /// <see cref="AllowDuplicates"/> is false - splitting would create a second stack of one kind.
+        /// </returns>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="index"/> is not a valid slot index.</exception>
+        public bool SplitStack(int index, int quantity)
+        {
+            EnsureValidIndex(index);
+            if (!AllowDuplicates || quantity <= 0) return false;
+
+            var slot = _slots[index];
+            if (slot.IsEmpty || slot.Item.StackLimit <= 1 || quantity >= slot.Quantity) return false;
+
+            var destinationIndex = FindOrCreateEmptySlotIndex();
+            return destinationIndex >= 0 && SplitStackInternal(index, quantity, destinationIndex);
+        }
+
+        /// <summary>
+        /// As <see cref="SplitStack(int,int)"/>, but into a specific slot, which must be empty.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">Either index is not a valid slot index.</exception>
+        public bool SplitStack(int index, int quantity, int destinationIndex)
+        {
+            EnsureValidIndex(index);
+            EnsureValidIndex(destinationIndex);
+            if (!AllowDuplicates || quantity <= 0 || index == destinationIndex) return false;
+
+            var slot = _slots[index];
+            if (slot.IsEmpty || slot.Item.StackLimit <= 1 || quantity >= slot.Quantity) return false;
+            if (!_slots[destinationIndex].IsEmpty) return false;
+
+            return SplitStackInternal(index, quantity, destinationIndex);
+        }
+
+        private bool SplitStackInternal(int index, int quantity, int destinationIndex)
+        {
+            using (BeginBatchUpdate())
+            {
+                var slot = _slots[index];
+                var item = slot.Item;
+                slot.Remove(quantity);
+                _slots[destinationIndex].Set(item, quantity);
+                MarkSlotChanged(index);
+                MarkSlotChanged(destinationIndex);
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Merges the stack at <paramref name="sourceIndex"/> into the one at
+        /// <paramref name="destinationIndex"/>, filling the destination to its stack limit and
+        /// leaving any remainder in the source.
+        /// </summary>
+        /// <returns>
+        /// False when the indices are equal, either slot is empty, the items do not
+        /// <see cref="Item.CanStackWith"/> each other, or the destination is already full.
+        /// </returns>
+        /// <exception cref="ArgumentOutOfRangeException">Either index is not a valid slot index.</exception>
+        public bool MergeStacks(int sourceIndex, int destinationIndex)
+        {
+            EnsureValidIndex(sourceIndex);
+            EnsureValidIndex(destinationIndex);
+            if (sourceIndex == destinationIndex) return false;
+
+            var source = _slots[sourceIndex];
+            var destination = _slots[destinationIndex];
+            if (source.IsEmpty || destination.IsEmpty) return false;
+            if (!source.Item.CanStackWith(destination.Item) || destination.IsFull) return false;
+
+            using (BeginBatchUpdate())
+            {
+                var moved = destination.Add(source.Quantity);
+                source.Remove(moved);
+
+                var sourceRemoved = source.IsEmpty && !IsFixedSize;
+                var effectiveDestinationIndex = destinationIndex;
+
+                if (sourceRemoved)
+                {
+                    _slots.RemoveAt(sourceIndex);
+                    if (destinationIndex > sourceIndex) effectiveDestinationIndex--;
+                    for (var j = sourceIndex; j < _slots.Count; j++) MarkSlotChanged(j);
+                }
+                else
+                {
+                    MarkSlotChanged(sourceIndex);
+                }
+
+                MarkSlotChanged(effectiveDestinationIndex);
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Merges every set of stackable like stacks into as few slots as possible, lowest index
+        /// first. One batch. No-op when <see cref="AllowDuplicates"/> is false.
+        /// </summary>
+        /// <returns>Number of slots freed.</returns>
+        public int Consolidate()
+        {
+            if (!AllowDuplicates) return 0;
+
+            var freedSlots = 0;
+
+            using (BeginBatchUpdate())
+            {
+                for (var i = 0; i < _slots.Count; i++)
+                {
+                    var target = _slots[i];
+                    if (target.IsEmpty || target.IsFull) continue;
+
+                    for (var j = i + 1; j < _slots.Count && target.RemainingSpace > 0; j++)
+                    {
+                        var candidate = _slots[j];
+                        if (candidate.IsEmpty || !candidate.Item.CanStackWith(target.Item)) continue;
+
+                        var moved = target.Add(candidate.Quantity);
+                        if (moved <= 0) continue;
+
+                        candidate.Remove(moved);
+                        MarkSlotChanged(i);
+
+                        if (!candidate.IsEmpty)
+                        {
+                            MarkSlotChanged(j);
+                            continue;
+                        }
+
+                        freedSlots++;
+
+                        if (IsFixedSize)
+                        {
+                            MarkSlotChanged(j);
+                        }
+                        else
+                        {
+                            _slots.RemoveAt(j);
+                            for (var k = j; k < _slots.Count; k++) MarkSlotChanged(k);
+                            j--;
+                        }
+                    }
+                }
+            }
+
+            return freedSlots;
+        }
+
+        /// <summary>
+        /// Reorders occupied slots by <paramref name="comparer"/>, pushing empty slots to the end.
+        /// Stable, so equally ranked items keep their relative order. Does not merge stacks - call
+        /// <see cref="Consolidate"/> first if you want that. One batch.
+        /// </summary>
+        /// <exception cref="ArgumentNullException"><paramref name="comparer"/> is null.</exception>
+        public void Sort(IComparer<TItem> comparer)
+        {
+            if (comparer == null) throw new ArgumentNullException(nameof(comparer));
+            Sort((a, b) => comparer.Compare(a, b));
+        }
+
+        /// <inheritdoc cref="Sort(IComparer{TItem})"/>
+        public void Sort(Comparison<TItem> comparison)
+        {
+            if (comparison == null) throw new ArgumentNullException(nameof(comparison));
+
+            var occupied = new List<(TItem Item, int Quantity, int OriginalIndex)>();
+            for (var i = 0; i < _slots.Count; i++)
+            {
+                var slot = _slots[i];
+                if (!slot.IsEmpty) occupied.Add((slot.Item, slot.Quantity, i));
+            }
+
+            if (occupied.Count == 0) return;
+
+            occupied.Sort((a, b) =>
+            {
+                var cmp = comparison(a.Item, b.Item);
+                return cmp != 0 ? cmp : a.OriginalIndex.CompareTo(b.OriginalIndex);
+            });
+
+            using (BeginBatchUpdate())
+            {
+                for (var i = 0; i < occupied.Count; i++)
+                {
+                    var (item, quantity, originalIndex) = occupied[i];
+                    if (originalIndex != i) MarkSlotChanged(i);
+                    _slots[i].Set(item, quantity);
+                }
+
+                for (var i = occupied.Count; i < _slots.Count; i++)
+                {
+                    if (_slots[i].IsEmpty) continue;
+                    _slots[i].Clear();
+                    MarkSlotChanged(i);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Shifts occupied slots to the lowest indices, preserving their relative order, so empty
+        /// slots are all at the end. One batch. Always a no-op returning false in unbounded mode,
+        /// which is compact by construction.
+        /// </summary>
+        /// <returns>True when at least one stack moved.</returns>
+        public bool Compact()
+        {
+            if (!IsFixedSize) return false;
+
+            var writeIndex = 0;
+            var changed = false;
+
+            using (BeginBatchUpdate())
+            {
+                for (var readIndex = 0; readIndex < _slots.Count; readIndex++)
+                {
+                    var slot = _slots[readIndex];
+                    if (slot.IsEmpty) continue;
+
+                    if (readIndex != writeIndex)
+                    {
+                        _slots[writeIndex].Set(slot.Item, slot.Quantity);
+                        slot.Clear();
+                        MarkSlotChanged(writeIndex);
+                        MarkSlotChanged(readIndex);
+                        changed = true;
+                    }
+
+                    writeIndex++;
+                }
+            }
+
+            return changed;
+        }
+
+        /// <summary>
+        /// Suppresses and coalesces events until the returned handle is disposed, so a run of
+        /// operations reports as one change. Reentrant: only the outermost scope flushes.
+        /// </summary>
+        public IDisposable BeginBatchUpdate() => new BatchScope(this);
+
+        /// <summary>
+        /// Whether this inventory accepts <paramref name="item"/> at all, regardless of space.
+        /// Returns true by default; override for filtered containers such as a disc-only bag.
+        /// Consulted by <see cref="CanAdd"/> and <see cref="GetFreeSpaceFor"/>.
+        /// </summary>
+        protected virtual bool CanAcceptItem(TItem item) => item != null;
+
+        private void EnsureValidIndex(int index)
+        {
+            if (!IsValidIndex(index)) throw new ArgumentOutOfRangeException(nameof(index));
+        }
+
+        private int FindOrCreateEmptySlotIndex()
+        {
+            for (var i = 0; i < _slots.Count; i++)
+            {
+                if (_slots[i].IsEmpty) return i;
+            }
+
+            if (IsFixedSize) return -1;
+
+            _slots.Add(new ItemStack<TItem>());
+            return _slots.Count - 1;
+        }
+
+        private void ApplyAdd(TItem item, int quantity)
+        {
+            var remaining = quantity;
+
+            for (var i = 0; i < _slots.Count && remaining > 0; i++)
+            {
+                var slot = _slots[i];
+                if (slot.IsEmpty || !item.CanStackWith(slot.Item)) continue;
+
+                var added = slot.Add(remaining);
+                if (added <= 0) continue;
+
+                remaining -= added;
+                MarkSlotChanged(i);
+            }
+
+            var blockedByExistingKind = !AllowDuplicates && IndexOf(item.UniqueId) >= 0;
+
+            while (remaining > 0 && !blockedByExistingKind)
+            {
+                var index = FindOrCreateEmptySlotIndex();
+                if (index < 0) break;
+
+                var toAdd = Math.Min(remaining, item.StackLimit);
+                _slots[index].Set(item, toAdd);
+                remaining -= toAdd;
+                MarkSlotChanged(index);
+
+                blockedByExistingKind = !AllowDuplicates;
+            }
+
+            EnqueueItemAdded(item, quantity);
+        }
+
+        private void ApplyRemoveByKind(string uniqueId, int quantity)
+        {
+            var remaining = quantity;
+            TItem removedItemSample = null;
+
+            for (var i = 0; i < _slots.Count && remaining > 0; i++)
+            {
+                var slot = _slots[i];
+                if (slot.IsEmpty || !string.Equals(slot.Item.UniqueId, uniqueId, StringComparison.Ordinal)) continue;
+
+                removedItemSample ??= slot.Item;
+                var removed = slot.Remove(remaining);
+                remaining -= removed;
+
+                if (slot.IsEmpty && !IsFixedSize)
+                {
+                    _slots.RemoveAt(i);
+                    for (var j = i; j < _slots.Count; j++) MarkSlotChanged(j);
+                    i--;
+                }
+                else
+                {
+                    MarkSlotChanged(i);
+                }
+            }
+
+            if (removedItemSample != null) EnqueueItemRemoved(removedItemSample, quantity);
+        }
+
+        private void EnqueueItemAdded(TItem item, int quantity)
+        {
+            _pendingItemEvents.Add(() => OnItemAdded?.Invoke(item, quantity));
+            _pendingInventoryUpdated = true;
+        }
+
+        private void EnqueueItemRemoved(TItem item, int quantity)
+        {
+            _pendingItemEvents.Add(() => OnItemRemoved?.Invoke(item, quantity));
+            _pendingInventoryUpdated = true;
+        }
+
+        private void MarkSlotChanged(int index)
+        {
+            _pendingSlotChanged.Add(index);
+            _pendingInventoryUpdated = true;
+        }
+
+        private void FlushPending()
+        {
+            if (_pendingItemEvents.Count > 0)
+            {
+                var events = _pendingItemEvents.ToArray();
+                _pendingItemEvents.Clear();
+                foreach (var raise in events) raise();
+            }
+
+            if (_pendingSlotChanged.Count > 0)
+            {
+                var indices = new int[_pendingSlotChanged.Count];
+                _pendingSlotChanged.CopyTo(indices);
+                _pendingSlotChanged.Clear();
+                foreach (var index in indices) OnSlotChanged?.Invoke(index);
+            }
+
+            if (_pendingInventoryUpdated)
+            {
+                _pendingInventoryUpdated = false;
+                OnInventoryUpdated?.Invoke();
+            }
+        }
+
+        private readonly struct BatchScope : IDisposable
+        {
+            private readonly Inventory<TItem> _inventory;
+
+            public BatchScope(Inventory<TItem> inventory)
+            {
+                _inventory = inventory;
+                _inventory._batchDepth++;
+            }
+
+            public void Dispose()
+            {
+                _inventory._batchDepth--;
+                if (_inventory._batchDepth == 0) _inventory.FlushPending();
+            }
+        }
+    }
+}
