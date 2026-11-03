@@ -27,6 +27,26 @@ namespace GI.UnityToolkit.Items.Test
         }
 
         [Test]
+        public void Constructor_WithInstanceId_PreservesIt()
+        {
+            var id = Guid.NewGuid();
+            var item = new TestItem(new FakeItemAttributes("disc"), id);
+            Assert.AreEqual(id, item.InstanceId);
+        }
+
+        [Test]
+        public void Constructor_EmptyInstanceId_Throws()
+        {
+            Assert.Throws<ArgumentException>(() => new TestItem(new FakeItemAttributes("disc"), Guid.Empty));
+        }
+
+        [Test]
+        public void Constructor_WithInstanceId_NullAttributes_Throws()
+        {
+            Assert.Throws<ArgumentNullException>(() => new TestItem(null, Guid.NewGuid()));
+        }
+
+        [Test]
         public void Attributes_AreForwardedFromSource()
         {
             var attributes = new FakeItemAttributes("disc", isStackable: true, maxStackSize: 5, name: "Disc", description: "A disc");

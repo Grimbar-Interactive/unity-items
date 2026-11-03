@@ -39,10 +39,22 @@ namespace GI.UnityToolkit.Items
         /// </summary>
         /// <param name="attributes">The edit-time attributes this instance is built from.</param>
         /// <exception cref="ArgumentNullException"><paramref name="attributes"/> is null.</exception>
-        protected Item(IItemAttributes attributes)
+        protected Item(IItemAttributes attributes) : this(attributes, Guid.NewGuid())
+        {
+        }
+
+        /// <summary>
+        /// Constructs an item with a known <see cref="InstanceId"/>, for restoring a saved item.
+        /// </summary>
+        /// <param name="attributes">The edit-time attributes this instance is built from.</param>
+        /// <param name="instanceId">The identity to restore. Must not be <see cref="Guid.Empty"/>.</param>
+        /// <exception cref="ArgumentNullException"><paramref name="attributes"/> is null.</exception>
+        /// <exception cref="ArgumentException"><paramref name="instanceId"/> is <see cref="Guid.Empty"/>.</exception>
+        protected Item(IItemAttributes attributes, Guid instanceId)
         {
             _attributes = attributes ?? throw new ArgumentNullException(nameof(attributes));
-            InstanceId = Guid.NewGuid();
+            if (instanceId == Guid.Empty) throw new ArgumentException("Instance id must not be empty.", nameof(instanceId));
+            InstanceId = instanceId;
         }
 
         /// <inheritdoc cref="IItemAttributes.UniqueId"/>
@@ -81,7 +93,8 @@ namespace GI.UnityToolkit.Items
         /// Override to additionally require per-instance state to match (durability, enchantment,
         /// applied patches). Overrides must be symmetric - <c>a.CanStackWith(b)</c> must equal
         /// <c>b.CanStackWith(a)</c> - because the inventory calls it in whichever direction is
-        /// convenient. Must return false for a null argument.
+        /// convenient. Must return false for a null argument, and must never return true for items
+        /// with different <see cref="UniqueId"/>s - the inventory also checks this when adding.
         /// </remarks>
         public virtual bool CanStackWith(Item other)
         {
@@ -117,6 +130,17 @@ namespace GI.UnityToolkit.Items
         /// <param name="definition">The typed attributes this instance is built from.</param>
         /// <exception cref="ArgumentNullException"><paramref name="definition"/> is null.</exception>
         protected Item(T definition) : base(definition)
+        {
+            Definition = definition;
+        }
+
+        /// <summary>
+        /// Constructs an item from its typed definition with a known <see cref="Item.InstanceId"/>,
+        /// for restoring a saved item.
+        /// </summary>
+        /// <exception cref="ArgumentNullException"><paramref name="definition"/> is null.</exception>
+        /// <exception cref="ArgumentException"><paramref name="instanceId"/> is <see cref="Guid.Empty"/>.</exception>
+        protected Item(T definition, Guid instanceId) : base(definition, instanceId)
         {
             Definition = definition;
         }

@@ -147,6 +147,47 @@ namespace GI.UnityToolkit.Items.Test
         }
 
         [Test]
+        public void Move_Unbounded_FullMerge_RemovesSourceSlot()
+        {
+            var inventory = new Inventory<TestItem>();
+            inventory.TryAdd(TestItems.Stackable("disc", max: 10), 6);
+            inventory.SplitStack(0, 2);
+
+            inventory.Move(1, 0);
+
+            Assert.AreEqual(1, inventory.SlotCount);
+            Assert.AreEqual(6, inventory[0].Quantity);
+        }
+
+        [Test]
+        public void Move_Unbounded_FullMerge_DestinationAfterSource_ReportsShiftedIndex()
+        {
+            var inventory = new Inventory<TestItem>();
+            inventory.TryAdd(TestItems.Stackable("disc", max: 10), 6);
+            inventory.SplitStack(0, 2);
+            using var recorder = new InventoryEventRecorder<TestItem>(inventory);
+
+            inventory.Move(0, 1);
+
+            Assert.AreEqual(1, inventory.SlotCount);
+            Assert.AreEqual(6, inventory[0].Quantity);
+            foreach (var index in recorder.ChangedSlots) Assert.Less(index, inventory.SlotCount);
+        }
+
+        [Test]
+        public void Move_Fixed_FullMerge_KeepsSlotCount()
+        {
+            var inventory = new Inventory<TestItem>(3);
+            inventory.TryAdd(TestItems.Stackable("disc", max: 10), 6);
+            inventory.SplitStack(0, 2);
+
+            inventory.Move(1, 0);
+
+            Assert.AreEqual(3, inventory.SlotCount);
+            Assert.IsTrue(inventory[1].IsEmpty);
+        }
+
+        [Test]
         public void Move_Unbounded_ReordersSlots()
         {
             var inventory = new Inventory<TestItem>();

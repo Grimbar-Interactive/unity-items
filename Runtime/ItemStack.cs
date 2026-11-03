@@ -46,11 +46,6 @@ namespace GI.UnityToolkit.Items
         {
         }
 
-        internal ItemStack(TItem item, int quantity)
-        {
-            Set(item, quantity);
-        }
-
         /// <summary>
         /// Replaces the slot's contents wholesale. Clamps to the item's stack limit.
         /// </summary>

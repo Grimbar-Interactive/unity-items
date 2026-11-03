@@ -1,7 +1,7 @@
 {
     "name": "com.grimbarinteractive.unity-items",
     "displayName": "Unity Items",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "unity": "2022.3",
     "description": "Item and inventory system management for Unity.",
     "keywords": [ "items", "inventory", "system", "game", "games", "unity" ],
@@ -12,6 +12,6 @@
     "author": {
         "name": "Grimbar Interactive",
         "email": "jacob@grimbar.dev",
-        "url": "http://grimbarinteractive.com"
+        "url": "https://grimbarinteractive.com"
     }
 }

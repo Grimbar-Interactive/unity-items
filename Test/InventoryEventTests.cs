@@ -1,3 +1,4 @@
+using System;
 using System.Reflection;
 using NUnit.Framework;
 
@@ -141,6 +142,22 @@ namespace GI.UnityToolkit.Items.Test
             inventory.Clear();
 
             Assert.AreEqual(2, recorder.RemovedCount);
+        }
+
+        [Test]
+        public void Clear_RaisesOnItemRemoved_InAscendingSlotOrder()
+        {
+            var inventory = new Inventory<TestItem>();
+            inventory.TryAdd(TestItems.NonStackable("a"), 1);
+            inventory.TryAdd(TestItems.NonStackable("b"), 1);
+            inventory.TryAdd(TestItems.NonStackable("c"), 1);
+            using var recorder = new InventoryEventRecorder<TestItem>(inventory);
+
+            inventory.Clear();
+
+            CollectionAssert.AreEqual(
+                new[] { "a", "b", "c" },
+                new[] { recorder.Removed[0].Item.UniqueId, recorder.Removed[1].Item.UniqueId, recorder.Removed[2].Item.UniqueId });
         }
 
         [Test]
@@ -365,6 +382,82 @@ namespace GI.UnityToolkit.Items.Test
             }
 
             CollectionAssert.AreEqual(new[] { 0, 1, 2 }, recorder.ChangedSlots);
+        }
+
+        [Test]
+        public void Unbounded_Batch_AddThenRemove_NeverReportsOutOfRangeIndex()
+        {
+            var inventory = new Inventory<TestItem>();
+            inventory.TryAdd(TestItems.NonStackable("a"), 1);
+            inventory.TryAdd(TestItems.NonStackable("b"), 1);
+            inventory.TryAdd(TestItems.NonStackable("c"), 1);
+            using var recorder = new InventoryEventRecorder<TestItem>(inventory);
+
+            using (inventory.BeginBatchUpdate())
+            {
+                inventory.TryAdd(TestItems.NonStackable("d"), 1);
+                inventory.TryRemoveAt(0, out _, out _);
+            }
+
+            Assert.AreEqual(3, inventory.SlotCount);
+            foreach (var index in recorder.ChangedSlots) Assert.Less(index, inventory.SlotCount);
+            Assert.AreEqual(1, recorder.UpdatedCount);
+        }
+
+        [Test]
+        public void BeginBatchUpdate_DoubleDispose_DoesNotBreakLaterEvents()
+        {
+            var inventory = new Inventory<TestItem>();
+            using var recorder = new InventoryEventRecorder<TestItem>(inventory);
+
+            var batch = inventory.BeginBatchUpdate();
+            batch.Dispose();
+            batch.Dispose();
+
+            inventory.TryAdd(TestItems.NonStackable("a"), 1);
+
+            Assert.AreEqual(1, recorder.UpdatedCount);
+        }
+
+        [Test]
+        public void ReentrantMutationInHandler_OuterOperationStillRaisesUpdated()
+        {
+            var inventory = new Inventory<TestItem>();
+            var updatedCount = 0;
+            var reentered = false;
+            inventory.OnInventoryUpdated += () => updatedCount++;
+            inventory.OnItemAdded += (_, _) =>
+            {
+                if (reentered) return;
+                reentered = true;
+                inventory.TryAdd(TestItems.NonStackable("second"), 1);
+            };
+
+            inventory.TryAdd(TestItems.NonStackable("first"), 1);
+
+            Assert.AreEqual(2, inventory.SlotCount);
+            Assert.AreEqual(2, updatedCount);
+        }
+
+        [Test]
+        public void ThrowingHandler_DoesNotLeakStaleEventsIntoNextOperation()
+        {
+            var inventory = new Inventory<TestItem>();
+            var shouldThrow = true;
+            inventory.OnItemAdded += (_, _) =>
+            {
+                if (shouldThrow) throw new InvalidOperationException("boom");
+            };
+            Assert.Throws<InvalidOperationException>(() => inventory.TryAdd(TestItems.NonStackable("a"), 1));
+            shouldThrow = false;
+            using var recorder = new InventoryEventRecorder<TestItem>(inventory);
+
+            Assert.IsTrue(inventory.TryRemoveAt(0, 1));
+
+            Assert.AreEqual(1, recorder.UpdatedCount);
+            Assert.AreEqual(1, recorder.RemovedCount);
+            Assert.AreEqual(0, recorder.AddedCount);
+            Assert.AreEqual(0, recorder.SlotChangedCount);
         }
 
         [Test]

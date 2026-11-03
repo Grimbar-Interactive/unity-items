@@ -37,6 +37,7 @@ namespace GI.UnityToolkit.Items
         public delegate void SlotDelegate(int index);
 
         private readonly List<ItemStack<TItem>> _slots;
+        private readonly IReadOnlyList<ItemStack<TItem>> _readOnlySlots;
         private readonly List<Action> _pendingItemEvents = new();
         private readonly SortedSet<int> _pendingSlotChanged = new();
         private bool _pendingInventoryUpdated;
@@ -58,6 +59,13 @@ namespace GI.UnityToolkit.Items
         /// Raised once for each slot index whose contents changed, in ascending index order.
         /// Coalesced within a batch, so a slot touched repeatedly reports once.
         /// </summary>
+        /// <remarks>
+        /// In unbounded mode a removed slot shifts later slots down. Indices that no longer exist
+        /// when the event is raised are skipped, and a slot that simply vanished (including the
+        /// last one, or everything after <see cref="Clear"/>) is reported only through
+        /// <see cref="OnInventoryUpdated"/>. Handlers should treat <see cref="SlotCount"/> as the
+        /// source of truth.
+        /// </remarks>
         public event SlotDelegate OnSlotChanged;
 
         /// <summary>
@@ -82,6 +90,7 @@ namespace GI.UnityToolkit.Items
             MaxSlotCount = maxSlotCount;
             AllowDuplicates = allowDuplicates;
             _slots = new List<ItemStack<TItem>>();
+            _readOnlySlots = _slots.AsReadOnly();
 
             if (maxSlotCount.HasValue)
             {
@@ -112,7 +121,7 @@ namespace GI.UnityToolkit.Items
         /// slots and always has <see cref="MaxSlotCount"/> entries; in unbounded mode it contains no
         /// empty slots.
         /// </summary>
-        public IReadOnlyList<ItemStack<TItem>> Slots => _slots;
+        public IReadOnlyList<ItemStack<TItem>> Slots => _readOnlySlots;
 
         /// <summary>
         /// Gets the slot at <paramref name="index"/>. Never null; may be empty.
@@ -184,9 +193,9 @@ namespace GI.UnityToolkit.Items
         {
             get
             {
-                var total = 0;
+                long total = 0;
                 for (var i = 0; i < _slots.Count; i++) total += _slots[i].Quantity;
-                return total;
+                return (int)Math.Min(total, int.MaxValue);
             }
         }
 
@@ -415,8 +424,7 @@ namespace GI.UnityToolkit.Items
                 }
                 else
                 {
-                    _slots.RemoveAt(index);
-                    for (var j = index; j < _slots.Count; j++) MarkSlotChanged(j);
+                    RemoveUnboundedSlot(index);
                 }
 
                 EnqueueItemRemoved(removedItem, removedQuantity);
@@ -456,8 +464,7 @@ namespace GI.UnityToolkit.Items
                 }
                 else
                 {
-                    _slots.RemoveAt(index);
-                    for (var j = index; j < _slots.Count; j++) MarkSlotChanged(j);
+                    RemoveUnboundedSlot(index);
                 }
 
                 EnqueueItemRemoved(item, quantity);
@@ -487,8 +494,7 @@ namespace GI.UnityToolkit.Items
 
                 if (slot.IsEmpty && !IsFixedSize)
                 {
-                    _slots.RemoveAt(index);
-                    for (var j = index; j < _slots.Count; j++) MarkSlotChanged(j);
+                    RemoveUnboundedSlot(index);
                 }
                 else
                 {
@@ -512,7 +518,7 @@ namespace GI.UnityToolkit.Items
 
             using (BeginBatchUpdate())
             {
-                for (var i = _slots.Count - 1; i >= 0; i--)
+                for (var i = 0; i < _slots.Count; i++)
                 {
                     var slot = _slots[i];
                     if (slot.IsEmpty) continue;
@@ -581,7 +587,7 @@ namespace GI.UnityToolkit.Items
         {
             if (string.IsNullOrEmpty(uniqueId)) return 0;
 
-            var total = 0;
+            long total = 0;
             for (var i = 0; i < _slots.Count; i++)
             {
                 var slot = _slots[i];
@@ -591,7 +597,7 @@ namespace GI.UnityToolkit.Items
                 }
             }
 
-            return total;
+            return (int)Math.Min(total, int.MaxValue);
         }
 
         /// <summary>
@@ -602,14 +608,14 @@ namespace GI.UnityToolkit.Items
         {
             if (predicate == null) throw new ArgumentNullException(nameof(predicate));
 
-            var total = 0;
+            long total = 0;
             for (var i = 0; i < _slots.Count; i++)
             {
                 var slot = _slots[i];
                 if (!slot.IsEmpty && predicate(slot.Item)) total += slot.Quantity;
             }
 
-            return total;
+            return (int)Math.Min(total, int.MaxValue);
         }
 
         /// <summary>
@@ -758,8 +764,8 @@ namespace GI.UnityToolkit.Items
         IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 
         /// <summary>
-        /// Exchanges the contents of two slots. Returns false for equal indices, changing nothing.
-        /// Slot objects are not replaced, so UI bindings survive.
+        /// Exchanges the contents of two slots. Returns false, changing nothing, for equal indices
+        /// or when both slots are empty. Slot objects are not replaced, so UI bindings survive.
         /// </summary>
         /// <exception cref="ArgumentOutOfRangeException">Either index is not a valid slot index.</exception>
         public bool Swap(int indexA, int indexB)
@@ -803,6 +809,8 @@ namespace GI.UnityToolkit.Items
 
             using (BeginBatchUpdate())
             {
+                var sourceRemoved = false;
+
                 if (destination.IsEmpty)
                 {
                     destination.Set(source.Item, source.Quantity);
@@ -812,14 +820,23 @@ namespace GI.UnityToolkit.Items
                 {
                     var moved = destination.Add(source.Quantity);
                     source.Remove(moved);
+                    sourceRemoved = source.IsEmpty && !IsFixedSize;
                 }
                 else
                 {
                     source.SwapWith(destination);
                 }
 
-                MarkSlotChanged(fromIndex);
-                MarkSlotChanged(toIndex);
+                if (sourceRemoved)
+                {
+                    RemoveUnboundedSlot(fromIndex);
+                    MarkSlotChanged(toIndex > fromIndex ? toIndex - 1 : toIndex);
+                }
+                else
+                {
+                    MarkSlotChanged(fromIndex);
+                    MarkSlotChanged(toIndex);
+                }
             }
 
             return true;
@@ -849,6 +866,8 @@ namespace GI.UnityToolkit.Items
 
         /// <summary>
         /// As <see cref="SplitStack(int,int)"/>, but into a specific slot, which must be empty.
+        /// Unbounded inventories hold no empty slots, so this always returns false there; use
+        /// <see cref="SplitStack(int,int)"/> instead.
         /// </summary>
         /// <exception cref="ArgumentOutOfRangeException">Either index is not a valid slot index.</exception>
         public bool SplitStack(int index, int quantity, int destinationIndex)
@@ -910,9 +929,8 @@ namespace GI.UnityToolkit.Items
 
                 if (sourceRemoved)
                 {
-                    _slots.RemoveAt(sourceIndex);
+                    RemoveUnboundedSlot(sourceIndex);
                     if (destinationIndex > sourceIndex) effectiveDestinationIndex--;
-                    for (var j = sourceIndex; j < _slots.Count; j++) MarkSlotChanged(j);
                 }
                 else
                 {
@@ -968,8 +986,7 @@ namespace GI.UnityToolkit.Items
                         }
                         else
                         {
-                            _slots.RemoveAt(j);
-                            for (var k = j; k < _slots.Count; k++) MarkSlotChanged(k);
+                            RemoveUnboundedSlot(j);
                             j--;
                         }
                     }
@@ -1083,6 +1100,16 @@ namespace GI.UnityToolkit.Items
             if (!IsValidIndex(index)) throw new ArgumentOutOfRangeException(nameof(index));
         }
 
+        /// <summary>
+        /// Removes the slot at <paramref name="index"/> (unbounded mode only) and marks every slot
+        /// that shifted down into its place as changed.
+        /// </summary>
+        private void RemoveUnboundedSlot(int index)
+        {
+            _slots.RemoveAt(index);
+            for (var j = index; j < _slots.Count; j++) MarkSlotChanged(j);
+        }
+
         private int FindOrCreateEmptySlotIndex()
         {
             for (var i = 0; i < _slots.Count; i++)
@@ -1104,6 +1131,7 @@ namespace GI.UnityToolkit.Items
             {
                 var slot = _slots[i];
                 if (slot.IsEmpty || !item.CanStackWith(slot.Item)) continue;
+                if (!string.Equals(slot.Item.UniqueId, item.UniqueId, StringComparison.Ordinal)) continue;
 
                 var added = slot.Add(remaining);
                 if (added <= 0) continue;
@@ -1146,8 +1174,7 @@ namespace GI.UnityToolkit.Items
 
                 if (slot.IsEmpty && !IsFixedSize)
                 {
-                    _slots.RemoveAt(i);
-                    for (var j = i; j < _slots.Count; j++) MarkSlotChanged(j);
+                    RemoveUnboundedSlot(i);
                     i--;
                 }
                 else
@@ -1179,31 +1206,46 @@ namespace GI.UnityToolkit.Items
 
         private void FlushPending()
         {
-            if (_pendingItemEvents.Count > 0)
+            // Snapshot and reset all pending state before raising anything, so a handler that
+            // mutates the inventory (re-entrancy) or throws cannot corrupt or leak this flush.
+            var events = _pendingItemEvents.Count > 0 ? _pendingItemEvents.ToArray() : null;
+            _pendingItemEvents.Clear();
+
+            int[] indices = null;
+            if (_pendingSlotChanged.Count > 0)
             {
-                var events = _pendingItemEvents.ToArray();
-                _pendingItemEvents.Clear();
+                // Unbounded removals shift slots down, so an index recorded earlier in a batch may
+                // no longer exist. Never report one.
+                var valid = new List<int>(_pendingSlotChanged.Count);
+                foreach (var index in _pendingSlotChanged)
+                {
+                    if (index < _slots.Count) valid.Add(index);
+                }
+
+                indices = valid.ToArray();
+                _pendingSlotChanged.Clear();
+            }
+
+            var updated = _pendingInventoryUpdated;
+            _pendingInventoryUpdated = false;
+
+            if (events != null)
+            {
                 foreach (var raise in events) raise();
             }
 
-            if (_pendingSlotChanged.Count > 0)
+            if (indices != null)
             {
-                var indices = new int[_pendingSlotChanged.Count];
-                _pendingSlotChanged.CopyTo(indices);
-                _pendingSlotChanged.Clear();
                 foreach (var index in indices) OnSlotChanged?.Invoke(index);
             }
 
-            if (_pendingInventoryUpdated)
-            {
-                _pendingInventoryUpdated = false;
-                OnInventoryUpdated?.Invoke();
-            }
+            if (updated) OnInventoryUpdated?.Invoke();
         }
 
-        private readonly struct BatchScope : IDisposable
+        private sealed class BatchScope : IDisposable
         {
             private readonly Inventory<TItem> _inventory;
+            private bool _disposed;
 
             public BatchScope(Inventory<TItem> inventory)
             {
@@ -1213,6 +1255,10 @@ namespace GI.UnityToolkit.Items
 
             public void Dispose()
             {
+                // Idempotent: a second Dispose must not unbalance the depth counter.
+                if (_disposed) return;
+                _disposed = true;
+
                 _inventory._batchDepth--;
                 if (_inventory._batchDepth == 0) _inventory.FlushPending();
             }

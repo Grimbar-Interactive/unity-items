@@ -6,6 +6,18 @@ namespace GI.UnityToolkit.Items.Test
     public class InventoryQueryTests
     {
         [Test]
+        public void Quantities_ClampToIntMaxValue_InsteadOfOverflowing()
+        {
+            var inventory = new Inventory<TestItem>();
+            inventory.TryAdd(TestItems.Stackable("disc", max: int.MaxValue), int.MaxValue);
+            inventory.TryAdd(TestItems.Stackable("disc", max: int.MaxValue), 5);
+
+            Assert.AreEqual(int.MaxValue, inventory.TotalQuantity);
+            Assert.AreEqual(int.MaxValue, inventory.GetQuantity("disc"));
+            Assert.AreEqual(int.MaxValue, inventory.GetQuantity(_ => true));
+        }
+
+        [Test]
         public void Contains_ByUniqueId_TrueWhenHeld()
         {
             var inventory = new Inventory<TestItem>();

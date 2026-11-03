@@ -81,6 +81,13 @@ namespace GI.UnityToolkit.Items.Test
         }
 
         [Test]
+        public void Slots_IsNotTheMutableBackingList()
+        {
+            var inventory = new Inventory<TestItem>(2);
+            Assert.IsNotInstanceOf<System.Collections.Generic.List<ItemStack<TestItem>>>(inventory.Slots);
+        }
+
+        [Test]
         public void ToString_EmptySlot()
         {
             var inventory = new Inventory<TestItem>(1);
