@@ -38,10 +38,29 @@ namespace GI.UnityToolkit.Items
 
         private readonly List<ItemStack<TItem>> _slots;
         private readonly IReadOnlyList<ItemStack<TItem>> _readOnlySlots;
-        private readonly List<Action> _pendingItemEvents = new();
-        private readonly SortedSet<int> _pendingSlotChanged = new();
+        // Pending notifications are held in plain lists and flushed through swap-in spare buffers, so
+        // a steady-state add/remove allocates nothing and a flush stays safe against re-entrancy.
+        private List<PendingItemEvent> _pendingItemEvents = new();
+        private List<PendingItemEvent> _spareItemEvents;
+        private List<int> _pendingSlots = new();
+        private List<int> _spareSlots;
         private bool _pendingInventoryUpdated;
         private int _batchDepth;
+        private int _version;
+
+        private readonly struct PendingItemEvent
+        {
+            public readonly bool Added;
+            public readonly TItem Item;
+            public readonly int Quantity;
+
+            public PendingItemEvent(bool added, TItem item, int quantity)
+            {
+                Added = added;
+                Item = item;
+                Quantity = quantity;
+            }
+        }
 
         /// <summary>
         /// Raised once per logical add with the item and the total units added, even when those units
@@ -215,6 +234,11 @@ namespace GI.UnityToolkit.Items
         {
             if (item == null || !CanAcceptItem(item)) return 0;
 
+            // A non-stackable instance may occupy only one slot: a second slot holding the same
+            // reference would share one InstanceId, and lookup/removal/save by instance would only
+            // ever see the first.
+            if (item.StackLimit <= 1 && IndexOf(item) >= 0) return 0;
+
             long existingSpace = 0;
             var hasExistingStackOfKind = false;
 
@@ -262,6 +286,8 @@ namespace GI.UnityToolkit.Items
         /// A non-stackable item (<see cref="Item.StackLimit"/> of 1) is rejected when
         /// <paramref name="quantity"/> exceeds 1, because each such slot needs its own instance and
         /// this method has only one to give. Use <see cref="AddRange"/> with distinct instances.
+        /// For the same reason, a non-stackable instance that is already held is rejected: one
+        /// object reference may occupy at most one slot.
         /// </para>
         /// </remarks>
         public bool TryAdd(TItem item, int quantity = 1) => TryAdd(item, quantity, out _);
@@ -273,7 +299,7 @@ namespace GI.UnityToolkit.Items
             remainder = quantity;
             if (!CanAdd(item, quantity)) return false;
 
-            using (BeginBatchUpdate())
+            using (OpenBatch())
             {
                 ApplyAdd(item, quantity);
             }
@@ -296,7 +322,7 @@ namespace GI.UnityToolkit.Items
             var toAdd = (int)Math.Min((long)effectiveQuantity, (long)available);
             if (toAdd <= 0) return 0;
 
-            using (BeginBatchUpdate())
+            using (OpenBatch())
             {
                 ApplyAdd(item, toAdd);
             }
@@ -318,7 +344,7 @@ namespace GI.UnityToolkit.Items
             var failed = new List<TItem>();
             var addedCount = 0;
 
-            using (BeginBatchUpdate())
+            using (OpenBatch())
             {
                 foreach (var item in items)
                 {
@@ -347,6 +373,15 @@ namespace GI.UnityToolkit.Items
         }
 
         /// <summary>
+        /// Whether <see cref="TryRemove(string,int)"/> would succeed with these arguments.
+        /// </summary>
+        public bool CanRemove(string uniqueId, int quantity = 1)
+        {
+            if (string.IsNullOrEmpty(uniqueId) || quantity <= 0) return false;
+            return GetQuantity(uniqueId) >= quantity;
+        }
+
+        /// <summary>
         /// Removes exactly <paramref name="quantity"/> units matching <paramref name="item"/>'s
         /// <see cref="IItemAttributes.UniqueId"/>, or nothing. Draining proceeds in ascending slot
         /// order. Matches by kind, not by reference - use <see cref="TryRemoveInstance"/> for that.
@@ -363,6 +398,12 @@ namespace GI.UnityToolkit.Items
             return TryRemove(item.UniqueId, quantity, out remainder);
         }
 
+        /// <summary>
+        /// As <see cref="TryRemove(TItem,int)"/>, selecting the kind directly by
+        /// <see cref="IItemAttributes.UniqueId"/>.
+        /// </summary>
+        public bool TryRemove(string uniqueId, int quantity = 1) => TryRemove(uniqueId, quantity, out _);
+
         /// <inheritdoc cref="TryRemove(TItem,int,out int)"/>
         public bool TryRemove(string uniqueId, int quantity, out int remainder)
         {
@@ -370,7 +411,7 @@ namespace GI.UnityToolkit.Items
             if (string.IsNullOrEmpty(uniqueId) || quantity <= 0) return false;
             if (GetQuantity(uniqueId) < quantity) return false;
 
-            using (BeginBatchUpdate())
+            using (OpenBatch())
             {
                 ApplyRemoveByKind(uniqueId, quantity);
             }
@@ -393,7 +434,7 @@ namespace GI.UnityToolkit.Items
             var toRemove = Math.Min(quantity, GetQuantity(uniqueId));
             if (toRemove <= 0) return 0;
 
-            using (BeginBatchUpdate())
+            using (OpenBatch())
             {
                 ApplyRemoveByKind(uniqueId, toRemove);
             }
@@ -411,7 +452,7 @@ namespace GI.UnityToolkit.Items
             var index = IndexOf(item);
             if (index < 0) return false;
 
-            using (BeginBatchUpdate())
+            using (OpenBatch())
             {
                 var slot = _slots[index];
                 var removedItem = slot.Item;
@@ -454,7 +495,7 @@ namespace GI.UnityToolkit.Items
             item = slot.Item;
             quantity = slot.Quantity;
 
-            using (BeginBatchUpdate())
+            using (OpenBatch())
             {
                 slot.Clear();
 
@@ -487,24 +528,192 @@ namespace GI.UnityToolkit.Items
             var slot = _slots[index];
             if (slot.IsEmpty || slot.Quantity < quantity) return false;
 
-            using (BeginBatchUpdate())
+            using (OpenBatch())
             {
-                var item = slot.Item;
-                slot.Remove(quantity);
-
-                if (slot.IsEmpty && !IsFixedSize)
-                {
-                    RemoveUnboundedSlot(index);
-                }
-                else
-                {
-                    MarkSlotChanged(index);
-                }
-
-                EnqueueItemRemoved(item, quantity);
+                RemoveFromSlot(index, quantity);
             }
 
             return true;
+        }
+
+        /// <summary>
+        /// Places <paramref name="quantity"/> units of <paramref name="item"/> into the slot at
+        /// exactly <paramref name="index"/>, or does nothing. The restore-from-save primitive: it
+        /// lets a fixed-size inventory be rebuilt slot by slot at the saved positions.
+        /// </summary>
+        /// <returns>
+        /// True when the units were placed. False when the item is null or rejected by
+        /// <see cref="CanAcceptItem"/>, <paramref name="quantity"/> is not positive, or:
+        /// <list type="bullet">
+        /// <item>the slot is empty and the quantity exceeds <see cref="Item.StackLimit"/>, the
+        /// kind is already held while <see cref="AllowDuplicates"/> is false, or a non-stackable
+        /// instance is already held;</item>
+        /// <item>the slot is occupied and the item cannot stack with it, or the stack lacks room
+        /// for the full quantity.</item>
+        /// </list>
+        /// </returns>
+        /// <remarks>
+        /// Atomic. Raises <see cref="OnItemAdded"/>, <see cref="OnSlotChanged"/> for
+        /// <paramref name="index"/>, and <see cref="OnInventoryUpdated"/> on success. An unbounded
+        /// inventory holds no empty slots, so only topping up an existing stack can succeed there;
+        /// rebuild one by calling <see cref="TryAdd(TItem,int)"/> in saved order instead.
+        /// </remarks>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="index"/> is not a valid slot index.</exception>
+        public bool TryAddAt(int index, TItem item, int quantity = 1)
+        {
+            EnsureValidIndex(index);
+            if (item == null || quantity <= 0 || !CanAcceptItem(item)) return false;
+
+            var slot = _slots[index];
+
+            if (slot.IsEmpty)
+            {
+                if (quantity > item.StackLimit) return false;
+                if (item.StackLimit <= 1 && IndexOf(item) >= 0) return false;
+                if (!AllowDuplicates && IndexOf(item.UniqueId) >= 0) return false;
+
+                using (OpenBatch())
+                {
+                    slot.Set(item, quantity);
+                    MarkSlotChanged(index);
+                    EnqueueItemAdded(item, quantity);
+                }
+
+                return true;
+            }
+
+            if (!item.CanStackWith(slot.Item)) return false;
+            if (!string.Equals(slot.Item.UniqueId, item.UniqueId, StringComparison.Ordinal)) return false;
+            if (slot.RemainingSpace < quantity) return false;
+
+            using (OpenBatch())
+            {
+                slot.Add(quantity);
+                MarkSlotChanged(index);
+                EnqueueItemAdded(item, quantity);
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Moves the entire stack at <paramref name="index"/> into <paramref name="target"/>, or
+        /// moves nothing.
+        /// </summary>
+        /// <inheritdoc cref="TryTransferTo(Inventory{TItem},int,int)"/>
+        public bool TryTransferTo(Inventory<TItem> target, int index)
+        {
+            ValidateTransfer(target, index);
+            return TryTransferTo(target, index, _slots[index].Quantity);
+        }
+
+        /// <summary>
+        /// Moves exactly <paramref name="quantity"/> units out of the stack at
+        /// <paramref name="index"/> and into <paramref name="target"/>, or moves nothing.
+        /// </summary>
+        /// <returns>
+        /// True when the full quantity moved. False when the slot is empty, holds fewer units than
+        /// requested, <paramref name="quantity"/> is not positive, or the target would not accept
+        /// the units (see <see cref="CanAdd"/>: stacking, capacity, <see cref="AllowDuplicates"/>
+        /// and <see cref="CanAcceptItem"/> are all the target's own rules).
+        /// </returns>
+        /// <remarks>
+        /// Atomic across both inventories: on failure neither changes and neither raises an event.
+        /// On success the target raises <see cref="OnItemAdded"/> and the source raises
+        /// <see cref="OnItemRemoved"/>, each followed by its own slot and update events. The target's
+        /// events are raised first. A stackable item moved in part leaves the same object reference
+        /// in both inventories, which is safe because stackable items are fungible.
+        /// </remarks>
+        /// <exception cref="ArgumentNullException"><paramref name="target"/> is null.</exception>
+        /// <exception cref="ArgumentException"><paramref name="target"/> is this inventory; use <see cref="Move"/>.</exception>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="index"/> is not a valid slot index.</exception>
+        public bool TryTransferTo(Inventory<TItem> target, int index, int quantity)
+        {
+            ValidateTransfer(target, index);
+            if (quantity <= 0) return false;
+
+            var slot = _slots[index];
+            if (slot.IsEmpty || slot.Quantity < quantity) return false;
+
+            var item = slot.Item;
+            if (!target.CanAdd(item, quantity)) return false;
+
+            ApplyTransfer(target, index, item, quantity);
+            return true;
+        }
+
+        /// <summary>
+        /// Moves as many of <paramref name="quantity"/> units out of the stack at
+        /// <paramref name="index"/> into <paramref name="target"/> as the target will take. Events
+        /// and sharing rules are as for <see cref="TryTransferTo(Inventory{TItem},int,int)"/>.
+        /// </summary>
+        /// <returns>Units actually moved, 0 to <paramref name="quantity"/>.</returns>
+        /// <exception cref="ArgumentNullException"><paramref name="target"/> is null.</exception>
+        /// <exception cref="ArgumentException"><paramref name="target"/> is this inventory; use <see cref="Move"/>.</exception>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="index"/> is not a valid slot index.</exception>
+        public int TransferUpTo(Inventory<TItem> target, int index, int quantity)
+        {
+            ValidateTransfer(target, index);
+            if (quantity <= 0) return 0;
+
+            var slot = _slots[index];
+            if (slot.IsEmpty) return 0;
+
+            var item = slot.Item;
+            var wanted = Math.Min(quantity, slot.Quantity);
+            var toMove = (int)Math.Min((long)wanted, (long)target.GetFreeSpaceFor(item));
+            if (toMove <= 0) return 0;
+
+            ApplyTransfer(target, index, item, toMove);
+            return toMove;
+        }
+
+        private void ValidateTransfer(Inventory<TItem> target, int index)
+        {
+            if (target == null) throw new ArgumentNullException(nameof(target));
+            if (ReferenceEquals(target, this))
+            {
+                throw new ArgumentException("Cannot transfer to the same inventory; use Move.", nameof(target));
+            }
+
+            EnsureValidIndex(index);
+        }
+
+        private void ApplyTransfer(Inventory<TItem> target, int index, TItem item, int quantity)
+        {
+            using (OpenBatch())
+            {
+                // The target is the inner scope, so its events flush before the source's.
+                using (target.OpenBatch())
+                {
+                    target.ApplyAdd(item, quantity);
+                }
+
+                RemoveFromSlot(index, quantity);
+            }
+        }
+
+        /// <summary>
+        /// Removes <paramref name="quantity"/> units from the occupied slot at <paramref name="index"/>,
+        /// dropping the slot when it empties in unbounded mode. Caller guarantees the slot holds
+        /// at least that many units and has opened a batch.
+        /// </summary>
+        private void RemoveFromSlot(int index, int quantity)
+        {
+            var slot = _slots[index];
+            var item = slot.Item;
+            slot.Remove(quantity);
+
+            if (slot.IsEmpty && !IsFixedSize)
+            {
+                RemoveUnboundedSlot(index);
+            }
+            else
+            {
+                MarkSlotChanged(index);
+            }
+
+            EnqueueItemRemoved(item, quantity);
         }
 
         /// <summary>
@@ -516,7 +725,7 @@ namespace GI.UnityToolkit.Items
         {
             if (IsEmpty) return;
 
-            using (BeginBatchUpdate())
+            using (OpenBatch())
             {
                 for (var i = 0; i < _slots.Count; i++)
                 {
@@ -539,14 +748,29 @@ namespace GI.UnityToolkit.Items
         /// The items held, in slot order, skipping empty slots. Equivalent to iterating the
         /// inventory directly with <c>foreach</c>.
         /// </summary>
-        public IEnumerable<TItem> Items
+        /// <remarks>
+        /// Like <see cref="List{T}"/>, enumeration throws <see cref="InvalidOperationException"/> if
+        /// the inventory is modified while it is in progress. Collect what you want to change first
+        /// (for example <c>inventory.FindAll(...).ToList()</c>), then mutate.
+        /// </remarks>
+        public IEnumerable<TItem> Items => EnumerateItems();
+
+        private IEnumerable<TItem> EnumerateItems()
         {
-            get
+            var version = _version;
+            var index = 0;
+
+            while (true)
             {
-                for (var i = 0; i < _slots.Count; i++)
+                if (version != _version)
                 {
-                    if (!_slots[i].IsEmpty) yield return _slots[i].Item;
+                    throw new InvalidOperationException("The inventory was modified during enumeration.");
                 }
+
+                if (index >= _slots.Count) yield break;
+
+                var slot = _slots[index++];
+                if (!slot.IsEmpty) yield return slot.Item;
             }
         }
 
@@ -778,7 +1002,7 @@ namespace GI.UnityToolkit.Items
             var slotB = _slots[indexB];
             if (slotA.IsEmpty && slotB.IsEmpty) return false;
 
-            using (BeginBatchUpdate())
+            using (OpenBatch())
             {
                 slotA.SwapWith(slotB);
                 MarkSlotChanged(indexA);
@@ -794,7 +1018,7 @@ namespace GI.UnityToolkit.Items
         /// destination holding a stackable match with room absorbs as much as fits, leaving any
         /// remainder in the source; any other occupied destination is swapped with.
         /// </summary>
-        /// <returns>False for equal indices, an empty source, or when nothing changed.</returns>
+        /// <returns>False for equal indices or an empty source; true for every other call.</returns>
         /// <exception cref="ArgumentOutOfRangeException">Either index is not a valid slot index.</exception>
         public bool Move(int fromIndex, int toIndex)
         {
@@ -807,7 +1031,7 @@ namespace GI.UnityToolkit.Items
 
             var destination = _slots[toIndex];
 
-            using (BeginBatchUpdate())
+            using (OpenBatch())
             {
                 var sourceRemoved = false;
 
@@ -885,7 +1109,7 @@ namespace GI.UnityToolkit.Items
 
         private bool SplitStackInternal(int index, int quantity, int destinationIndex)
         {
-            using (BeginBatchUpdate())
+            using (OpenBatch())
             {
                 var slot = _slots[index];
                 var item = slot.Item;
@@ -919,7 +1143,7 @@ namespace GI.UnityToolkit.Items
             if (source.IsEmpty || destination.IsEmpty) return false;
             if (!source.Item.CanStackWith(destination.Item) || destination.IsFull) return false;
 
-            using (BeginBatchUpdate())
+            using (OpenBatch())
             {
                 var moved = destination.Add(source.Quantity);
                 source.Remove(moved);
@@ -954,7 +1178,7 @@ namespace GI.UnityToolkit.Items
 
             var freedSlots = 0;
 
-            using (BeginBatchUpdate())
+            using (OpenBatch())
             {
                 for (var i = 0; i < _slots.Count; i++)
                 {
@@ -1028,7 +1252,7 @@ namespace GI.UnityToolkit.Items
                 return cmp != 0 ? cmp : a.OriginalIndex.CompareTo(b.OriginalIndex);
             });
 
-            using (BeginBatchUpdate())
+            using (OpenBatch())
             {
                 for (var i = 0; i < occupied.Count; i++)
                 {
@@ -1059,7 +1283,7 @@ namespace GI.UnityToolkit.Items
             var writeIndex = 0;
             var changed = false;
 
-            using (BeginBatchUpdate())
+            using (OpenBatch())
             {
                 for (var readIndex = 0; readIndex < _slots.Count; readIndex++)
                 {
@@ -1106,6 +1330,7 @@ namespace GI.UnityToolkit.Items
         /// </summary>
         private void RemoveUnboundedSlot(int index)
         {
+            _version++;
             _slots.RemoveAt(index);
             for (var j = index; j < _slots.Count; j++) MarkSlotChanged(j);
         }
@@ -1188,58 +1413,104 @@ namespace GI.UnityToolkit.Items
 
         private void EnqueueItemAdded(TItem item, int quantity)
         {
-            _pendingItemEvents.Add(() => OnItemAdded?.Invoke(item, quantity));
+            _version++;
+            _pendingItemEvents.Add(new PendingItemEvent(true, item, quantity));
             _pendingInventoryUpdated = true;
         }
 
         private void EnqueueItemRemoved(TItem item, int quantity)
         {
-            _pendingItemEvents.Add(() => OnItemRemoved?.Invoke(item, quantity));
+            _version++;
+            _pendingItemEvents.Add(new PendingItemEvent(false, item, quantity));
             _pendingInventoryUpdated = true;
         }
 
         private void MarkSlotChanged(int index)
         {
-            _pendingSlotChanged.Add(index);
+            _version++;
+
+            // Duplicates are collapsed at flush time; skipping an immediate repeat keeps hot loops small.
+            var pending = _pendingSlots;
+            if (pending.Count == 0 || pending[pending.Count - 1] != index) pending.Add(index);
             _pendingInventoryUpdated = true;
         }
 
         private void FlushPending()
         {
-            // Snapshot and reset all pending state before raising anything, so a handler that
-            // mutates the inventory (re-entrancy) or throws cannot corrupt or leak this flush.
-            var events = _pendingItemEvents.Count > 0 ? _pendingItemEvents.ToArray() : null;
-            _pendingItemEvents.Clear();
-
-            int[] indices = null;
-            if (_pendingSlotChanged.Count > 0)
-            {
-                // Unbounded removals shift slots down, so an index recorded earlier in a batch may
-                // no longer exist. Never report one.
-                var valid = new List<int>(_pendingSlotChanged.Count);
-                foreach (var index in _pendingSlotChanged)
-                {
-                    if (index < _slots.Count) valid.Add(index);
-                }
-
-                indices = valid.ToArray();
-                _pendingSlotChanged.Clear();
-            }
-
+            var events = _pendingItemEvents;
+            var slots = _pendingSlots;
             var updated = _pendingInventoryUpdated;
             _pendingInventoryUpdated = false;
 
-            if (events != null)
+            if (events.Count == 0 && slots.Count == 0 && !updated) return;
+
+            // Hand fresh (or recycled) buffers to the inventory before raising anything, so a
+            // handler that mutates the inventory (re-entrancy) or throws cannot corrupt or leak
+            // this flush. The buffers being raised from are recycled once the flush ends.
+            _pendingItemEvents = _spareItemEvents ?? new List<PendingItemEvent>();
+            _spareItemEvents = null;
+            _pendingSlots = _spareSlots ?? new List<int>();
+            _spareSlots = null;
+
+            // Unbounded removals shift slots down, so an index recorded earlier in a batch may no
+            // longer exist. Never report one.
+            var slotLimit = _slots.Count;
+
+            try
             {
-                foreach (var raise in events) raise();
+                for (var i = 0; i < events.Count; i++)
+                {
+                    var pending = events[i];
+                    if (pending.Added) OnItemAdded?.Invoke(pending.Item, pending.Quantity);
+                    else OnItemRemoved?.Invoke(pending.Item, pending.Quantity);
+                }
+
+                if (slots.Count > 0)
+                {
+                    slots.Sort();
+                    var previous = -1;
+                    for (var i = 0; i < slots.Count; i++)
+                    {
+                        var index = slots[i];
+                        if (index == previous || index >= slotLimit) continue;
+                        previous = index;
+                        OnSlotChanged?.Invoke(index);
+                    }
+                }
+
+                if (updated) OnInventoryUpdated?.Invoke();
+            }
+            finally
+            {
+                events.Clear();
+                slots.Clear();
+                _spareItemEvents = events;
+                _spareSlots = slots;
+            }
+        }
+
+        private Batch OpenBatch() => new Batch(this);
+
+        /// <summary>
+        /// Allocation-free batch scope for internal operations. Not idempotent - dispose exactly once,
+        /// which <c>using</c> guarantees. The public <see cref="BeginBatchUpdate"/> hands out the
+        /// idempotent <see cref="BatchScope"/> class instead.
+        /// </summary>
+        private readonly struct Batch : IDisposable
+        {
+            private readonly Inventory<TItem> _inventory;
+
+            public Batch(Inventory<TItem> inventory)
+            {
+                _inventory = inventory;
+                inventory._batchDepth++;
             }
 
-            if (indices != null)
+            public void Dispose()
             {
-                foreach (var index in indices) OnSlotChanged?.Invoke(index);
+                _inventory._batchDepth--;
+                if (_inventory._batchDepth == 0) _inventory.FlushPending();
             }
-
-            if (updated) OnInventoryUpdated?.Invoke();
         }
 
         private sealed class BatchScope : IDisposable

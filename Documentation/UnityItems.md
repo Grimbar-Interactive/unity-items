@@ -29,16 +29,33 @@ var unique = new Inventory<MyItem>(20, allowDuplicates: false); // at most one s
 
 | Method | Behaviour |
 | --- | --- |
-| `TryAdd` / `TryRemove` / `TryRemoveAt(index, qty)` | **All-or-nothing.** On failure nothing changes and no events fire. |
+| `TryAdd` / `TryRemove` / `TryRemoveAt(index, qty)` | **All-or-nothing.** On failure nothing changes and no events fire. `TryRemove` takes an item or a `UniqueId` string. |
+| `TryAddAt(index, item, qty)` | All-or-nothing placement into a specific slot. Used to restore saves. |
 | `AddUpTo` / `RemoveUpTo` | Best effort. Returns how many units were actually moved. |
 | `AddRange` | Adds one unit of each item, best effort, as a single batch. Reports what did not fit. |
-| `CanAdd` / `CanRemove` / `GetFreeSpaceFor` | Ask first. `IsFull` only says no *slot* is free; a full inventory can still accept units that stack. |
+| `CanAdd` / `CanRemove` / `GetFreeSpaceFor` | Ask first. `IsFull` only says no *slot* is free; a full inventory can still accept units that stack. `CanRemove` takes an item or a `UniqueId`. |
 
-A non-stackable item (`StackLimit == 1`) can only be added one unit at a time per instance; use `AddRange` with distinct instances.
+A non-stackable item (`StackLimit == 1`) can only be added one unit at a time per instance; use `AddRange` with distinct instances. One non-stackable *instance* can occupy only one slot, so adding an instance that is already held is rejected.
 
 ## Organising slots
 
 `Swap`, `Move` (drag-and-drop: move, merge, or swap), `SplitStack`, `MergeStacks`, `Consolidate`, `Sort`, `Compact`.
+
+## Moving between inventories
+
+```csharp
+bag.TryTransferTo(chest, index);          // whole stack, all or nothing
+bag.TryTransferTo(chest, index, 3);       // exactly 3 units, all or nothing
+var moved = bag.TransferUpTo(chest, index, 10); // as many as the chest will take
+```
+
+The target's own rules decide: stacking, free slots, `allowDuplicates`, and any `CanAcceptItem` override. A failed `TryTransferTo` changes neither inventory and raises no events. On success the target raises `OnItemAdded` and the source raises `OnItemRemoved`, each followed by its own slot and update events (target first). Transferring to the same inventory throws; use `Move`.
+
+Enumerating an inventory (`foreach`, `Items`, `FindAll`) throws `InvalidOperationException` if the inventory changes mid-loop, like `List<T>`. Copy what you need first, then mutate:
+
+```csharp
+foreach (var item in inventory.FindAll(IsExpired).ToList()) inventory.TryRemoveInstance(item);
+```
 
 ## Events
 
@@ -82,10 +99,24 @@ public class DiscBag : Inventory<MyItem>
 
 `Inventory` and `ItemStack` are intentionally **not** Unity-serializable. Persist through your own DTO:
 
-- Stackable items: save `UniqueId` + quantity per slot.
-- Non-stackable items with per-instance state: also save `InstanceId`, and restore it with the `Item(attributes, instanceId)` constructor.
-- Rebuild by looking up the `ItemDefinition` from the saved `UniqueId`, constructing the item, and calling `TryAdd` (or `Move`/`Swap` to restore exact slot positions in a fixed-size inventory).
+- Save one record per occupied slot: slot index, `UniqueId`, quantity, and (for non-stackable items with per-instance state) `InstanceId`.
+- Restore by looking up the `ItemDefinition` from the saved `UniqueId` and constructing the item. Use the `Item(attributes, instanceId)` constructor to bring back a saved `InstanceId`.
+- **Fixed-size inventories:** call `TryAddAt(slotIndex, item, quantity)` for each record. Items return to exactly their saved slots, and a failed call (bad data, a definition that changed) leaves the slot untouched and returns false.
+- **Unbounded inventories:** there are no empty slots to address, so call `TryAdd` for each record in saved order. Slot order is rebuilt exactly.
+
+```csharp
+var restored = new Inventory<MyItem>(save.SlotCount);
+foreach (var entry in save.Slots)
+{
+    var item = new MyItem(definitions[entry.UniqueId], entry.InstanceId);
+    if (!restored.TryAddAt(entry.Index, item, entry.Quantity)) Debug.LogWarning($"Could not restore {entry.UniqueId}");
+}
+```
 
 ## Authoring definitions
 
 `ItemDefinition` needs a non-empty, unique, never-changing `UniqueId`. `MaxStackSize` defaults to 1 and is clamped to at least 1; it is ignored unless `IsStackable` is set. In the editor, a missing `UniqueId` logs a warning when the asset is validated.
+
+Two definitions sharing a `UniqueId` are treated as one kind everywhere: they stack together and collide in saves. The editor assembly (`GrimbarInteractive.UnityToolkit.Items.Editor`) checks for this automatically after any `ItemDefinition` asset is created, duplicated, saved or moved, and warns once per duplicated id listing every asset involved (click the warning to ping the first). Run it on demand from **Grimbar Interactive > Items > Validate Unique Ids**, or call `ItemDefinitionValidator.FindDuplicateUniqueIds` from your own tooling or tests.
+
+`ItemDefinition.OnValidate` is `protected virtual` in every build, so a subclass can override it (calling the base) without wrapping the override in `#if UNITY_EDITOR`.

@@ -33,9 +33,10 @@ namespace GI.UnityToolkit.Items
         public bool IsEmpty => Item == null;
 
         /// <summary>
-        /// Units that could still be added to this stack. Zero when the slot is empty.
+        /// Units that could still be added to this stack. Zero when the slot is empty or already at
+        /// or beyond its limit (an item's limit can shrink after it was stacked).
         /// </summary>
-        public int RemainingSpace => IsEmpty ? 0 : Item.StackLimit - Quantity;
+        public int RemainingSpace => IsEmpty ? 0 : Math.Max(0, Item.StackLimit - Quantity);
 
         /// <summary>
         /// True when the stack has reached its item's stack limit. False when the slot is empty.

@@ -26,20 +26,25 @@ namespace GI.UnityToolkit.Items
         /// <inheritdoc cref="IItemAttributes.MaxStackSize"/>
         [field: SerializeField, Min(1)] public virtual int MaxStackSize { get; private set; } = 1;
 
-#if UNITY_EDITOR
         /// <summary>
         /// Editor-only validation: trims <see cref="UniqueId"/> and warns when it is missing, since
         /// an empty id breaks stacking and lookup. Override and call the base when extending.
         /// </summary>
+        /// <remarks>
+        /// Declared in every build, with only the body compiled out of players, so a subclass that
+        /// overrides it compiles everywhere without wrapping its own override in <c>#if</c>. Unity
+        /// only ever calls it in the editor.
+        /// </remarks>
         protected virtual void OnValidate()
         {
+#if UNITY_EDITOR
             UniqueId = UniqueId?.Trim();
 
             if (string.IsNullOrEmpty(UniqueId))
             {
                 Debug.LogWarning($"{GetType().Name} '{name}' has no UniqueId. Items need one to stack and be looked up.", this);
             }
-        }
 #endif
+        }
     }
 }

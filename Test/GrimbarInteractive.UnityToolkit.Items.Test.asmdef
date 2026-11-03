@@ -3,6 +3,7 @@
     "rootNamespace": "GI.UnityToolkit.Items.Test",
     "references": [
         "GrimbarInteractive.UnityToolkit.Items",
+        "GrimbarInteractive.UnityToolkit.Items.Editor",
         "UnityEngine.TestRunner",
         "UnityEditor.TestRunner"
     ],
