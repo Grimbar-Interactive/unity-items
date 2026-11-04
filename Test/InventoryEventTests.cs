@@ -496,6 +496,35 @@ namespace GI.UnityToolkit.Items.Test
         }
 
         [Test]
+        public void Unbounded_HandlerThatShrinksInventory_NeverCausesOutOfRangeSlotIndex()
+        {
+            var inventory = new Inventory<TestItem>();
+            inventory.TryAdd(TestItems.NonStackable("a"));
+            inventory.TryAdd(TestItems.NonStackable("b"));
+            inventory.TryAdd(TestItems.NonStackable("c"));
+
+            var reported = new System.Collections.Generic.List<(int Index, int SlotCount)>();
+            var cleared = false;
+            inventory.OnItemAdded += (_, _) =>
+            {
+                if (cleared) return;
+                cleared = true;
+                inventory.Clear();
+            };
+            inventory.OnSlotChanged += index => reported.Add((index, inventory.SlotCount));
+
+            using (inventory.BeginBatchUpdate())
+            {
+                inventory.TryAdd(TestItems.NonStackable("d"));
+            }
+
+            foreach (var (index, slotCount) in reported)
+            {
+                Assert.Less(index, slotCount, $"Reported slot {index} but only {slotCount} slots exist.");
+            }
+        }
+
+        [Test]
         public void OnItemAdded_IsAnEventNotAField()
         {
             var type = typeof(Inventory<TestItem>);

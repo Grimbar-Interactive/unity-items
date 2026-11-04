@@ -2,6 +2,9 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 
+// ReSharper disable ForCanBeConvertedToForeach
+// ReSharper disable LoopCanBeConvertedToQuery
+
 namespace GI.UnityToolkit.Items
 {
     /// <summary>
@@ -37,7 +40,7 @@ namespace GI.UnityToolkit.Items
         public delegate void SlotDelegate(int index);
 
         private readonly List<ItemStack<TItem>> _slots;
-        private readonly IReadOnlyList<ItemStack<TItem>> _readOnlySlots;
+
         // Pending notifications are held in plain lists and flushed through swap-in spare buffers, so
         // a steady-state add/remove allocates nothing and a flush stays safe against re-entrancy.
         private List<PendingItemEvent> _pendingItemEvents = new();
@@ -109,7 +112,7 @@ namespace GI.UnityToolkit.Items
             MaxSlotCount = maxSlotCount;
             AllowDuplicates = allowDuplicates;
             _slots = new List<ItemStack<TItem>>();
-            _readOnlySlots = _slots.AsReadOnly();
+            Slots = _slots.AsReadOnly();
 
             if (maxSlotCount.HasValue)
             {
@@ -125,7 +128,7 @@ namespace GI.UnityToolkit.Items
         /// <summary>
         /// When false, at most one slot may hold any given <see cref="IItemAttributes.UniqueId"/>.
         /// Because a slot and a stack are the same thing here, this means one <i>stack</i> per kind:
-        /// a stackable item may still fill that single stack to its <see cref="Item.StackLimit"/>,
+        /// a stackable item may still fill that single stack to its <see cref="Item.MaxStackSize"/>,
         /// but may never overflow into a second slot.
         /// </summary>
         public bool AllowDuplicates { get; }
@@ -140,7 +143,7 @@ namespace GI.UnityToolkit.Items
         /// slots and always has <see cref="MaxSlotCount"/> entries; in unbounded mode it contains no
         /// empty slots.
         /// </summary>
-        public IReadOnlyList<ItemStack<TItem>> Slots => _readOnlySlots;
+        public IReadOnlyList<ItemStack<TItem>> Slots { get; }
 
         /// <summary>
         /// Gets the slot at <paramref name="index"/>. Never null; may be empty.
@@ -180,7 +183,7 @@ namespace GI.UnityToolkit.Items
         /// <summary>
         /// Number of empty slots, or null when unbounded.
         /// </summary>
-        public int? FreeSlotCount => IsFixedSize ? MaxSlotCount.Value - FilledSlotCount : null;
+        public int? FreeSlotCount => IsFixedSize ? MaxSlotCount!.Value - FilledSlotCount : null;
 
         /// <summary>
         /// True when no slot holds an item.
@@ -203,7 +206,7 @@ namespace GI.UnityToolkit.Items
         /// accept units of an item that stacks with an existing partial stack, so gate adds on
         /// <see cref="CanAdd"/> or <see cref="GetFreeSpaceFor"/>, never on this.
         /// </summary>
-        public bool IsFull => IsFixedSize && FilledSlotCount >= MaxSlotCount.Value;
+        public bool IsFull => IsFixedSize && FilledSlotCount >= MaxSlotCount!.Value;
 
         /// <summary>
         /// Total units held across all stacks.
@@ -224,7 +227,7 @@ namespace GI.UnityToolkit.Items
         public bool IsValidIndex(int index) => index >= 0 && index < _slots.Count;
 
         /// <summary>
-        /// Units of <paramref name="item"/> that could be added right now, honouring stacking, slot
+        /// Units of <paramref name="item"/> that could be added right now, honoring stacking, slot
         /// capacity, <see cref="AllowDuplicates"/>, and <see cref="CanAcceptItem"/>. Returns
         /// <see cref="int.MaxValue"/> when unbounded and accepted, and 0 for a null or rejected item.
         /// </summary>
@@ -237,7 +240,7 @@ namespace GI.UnityToolkit.Items
             // A non-stackable instance may occupy only one slot: a second slot holding the same
             // reference would share one InstanceId, and lookup/removal/save by instance would only
             // ever see the first.
-            if (item.StackLimit <= 1 && IndexOf(item) >= 0) return 0;
+            if (item.MaxStackSize <= 1 && IndexOf(item) >= 0) return 0;
 
             long existingSpace = 0;
             var hasExistingStackOfKind = false;
@@ -256,12 +259,12 @@ namespace GI.UnityToolkit.Items
             {
                 if (hasExistingStackOfKind) return (int)Math.Min(existingSpace, int.MaxValue);
                 if (IsFixedSize && FreeSlotCount <= 0) return 0;
-                return item.StackLimit;
+                return item.MaxStackSize;
             }
 
             if (!IsFixedSize) return int.MaxValue;
 
-            var newSlotsSpace = (long)FreeSlotCount.GetValueOrDefault() * item.StackLimit;
+            var newSlotsSpace = (long)FreeSlotCount.GetValueOrDefault() * item.MaxStackSize;
             return (int)Math.Min(existingSpace + newSlotsSpace, int.MaxValue);
         }
 
@@ -271,7 +274,7 @@ namespace GI.UnityToolkit.Items
         public bool CanAdd(TItem item, int quantity = 1)
         {
             if (item == null || quantity <= 0) return false;
-            if (item.StackLimit <= 1 && quantity > 1) return false;
+            if (item.MaxStackSize <= 1 && quantity > 1) return false;
             return quantity <= GetFreeSpaceFor(item);
         }
 
@@ -283,7 +286,7 @@ namespace GI.UnityToolkit.Items
         /// Fills partial stacks of matching items in ascending slot order first, then consumes empty
         /// slots. Atomic: if the full quantity does not fit, no slot is touched and no event fires.
         /// <para>
-        /// A non-stackable item (<see cref="Item.StackLimit"/> of 1) is rejected when
+        /// A non-stackable item (<see cref="Item.MaxStackSize"/> of 1) is rejected when
         /// <paramref name="quantity"/> exceeds 1, because each such slot needs its own instance and
         /// this method has only one to give. Use <see cref="AddRange"/> with distinct instances.
         /// For the same reason, a non-stackable instance that is already held is rejected: one
@@ -317,7 +320,7 @@ namespace GI.UnityToolkit.Items
         {
             if (item == null || quantity <= 0 || !CanAcceptItem(item)) return 0;
 
-            var effectiveQuantity = item.StackLimit <= 1 ? Math.Min(quantity, 1) : quantity;
+            var effectiveQuantity = item.MaxStackSize <= 1 ? Math.Min(quantity, 1) : quantity;
             var available = GetFreeSpaceFor(item);
             var toAdd = (int)Math.Min((long)effectiveQuantity, (long)available);
             if (toAdd <= 0) return 0;
@@ -545,7 +548,7 @@ namespace GI.UnityToolkit.Items
         /// True when the units were placed. False when the item is null or rejected by
         /// <see cref="CanAcceptItem"/>, <paramref name="quantity"/> is not positive, or:
         /// <list type="bullet">
-        /// <item>the slot is empty and the quantity exceeds <see cref="Item.StackLimit"/>, the
+        /// <item>the slot is empty and the quantity exceeds <see cref="Item.MaxStackSize"/>, the
         /// kind is already held while <see cref="AllowDuplicates"/> is false, or a non-stackable
         /// instance is already held;</item>
         /// <item>the slot is occupied and the item cannot stack with it, or the stack lacks room
@@ -568,8 +571,8 @@ namespace GI.UnityToolkit.Items
 
             if (slot.IsEmpty)
             {
-                if (quantity > item.StackLimit) return false;
-                if (item.StackLimit <= 1 && IndexOf(item) >= 0) return false;
+                if (quantity > item.MaxStackSize) return false;
+                if (item.MaxStackSize <= 1 && IndexOf(item) >= 0) return false;
                 if (!AllowDuplicates && IndexOf(item.UniqueId) >= 0) return false;
 
                 using (OpenBatch())
@@ -621,7 +624,7 @@ namespace GI.UnityToolkit.Items
         /// Atomic across both inventories: on failure neither changes and neither raises an event.
         /// On success the target raises <see cref="OnItemAdded"/> and the source raises
         /// <see cref="OnItemRemoved"/>, each followed by its own slot and update events. The target's
-        /// events are raised first. A stackable item moved in part leaves the same object reference
+        /// events are raised first, but both inventories are already fully updated by then. A stackable item moved in part leaves the same object reference
         /// in both inventories, which is safe because stackable items are fungible.
         /// </remarks>
         /// <exception cref="ArgumentNullException"><paramref name="target"/> is null.</exception>
@@ -681,14 +684,13 @@ namespace GI.UnityToolkit.Items
 
         private void ApplyTransfer(Inventory<TItem> target, int index, TItem item, int quantity)
         {
+            // Both inventories are fully updated before either raises an event, so no handler can
+            // observe the units in both places or mutate the source mid-transfer. The target is
+            // the inner scope, so its events still flush before the source's.
             using (OpenBatch())
+            using (target.OpenBatch())
             {
-                // The target is the inner scope, so its events flush before the source's.
-                using (target.OpenBatch())
-                {
-                    target.ApplyAdd(item, quantity);
-                }
-
+                target.ApplyAdd(item, quantity);
                 RemoveFromSlot(index, quantity);
             }
         }
@@ -1071,8 +1073,9 @@ namespace GI.UnityToolkit.Items
         /// the first empty slot (fixed size) or a newly appended slot (unbounded).
         /// </summary>
         /// <returns>
-        /// False when the quantity is non-positive or not strictly less than the stack's quantity
-        /// (at least one unit must remain), the slot is empty, no slot is available, or
+        /// False when the quantity is non-positive, not strictly less than the stack's quantity
+        /// (at least one unit must remain), or above the item's <see cref="Item.MaxStackSize"/>, the
+        /// slot is empty, no slot is available, or
         /// <see cref="AllowDuplicates"/> is false - splitting would create a second stack of one kind.
         /// </returns>
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="index"/> is not a valid slot index.</exception>
@@ -1082,7 +1085,8 @@ namespace GI.UnityToolkit.Items
             if (!AllowDuplicates || quantity <= 0) return false;
 
             var slot = _slots[index];
-            if (slot.IsEmpty || slot.Item.StackLimit <= 1 || quantity >= slot.Quantity) return false;
+            if (slot.IsEmpty || slot.Item.MaxStackSize <= 1 || quantity >= slot.Quantity) return false;
+            if (quantity > slot.Item.MaxStackSize) return false;
 
             var destinationIndex = FindOrCreateEmptySlotIndex();
             return destinationIndex >= 0 && SplitStackInternal(index, quantity, destinationIndex);
@@ -1101,7 +1105,8 @@ namespace GI.UnityToolkit.Items
             if (!AllowDuplicates || quantity <= 0 || index == destinationIndex) return false;
 
             var slot = _slots[index];
-            if (slot.IsEmpty || slot.Item.StackLimit <= 1 || quantity >= slot.Quantity) return false;
+            if (slot.IsEmpty || slot.Item.MaxStackSize <= 1 || quantity >= slot.Quantity) return false;
+            if (quantity > slot.Item.MaxStackSize) return false;
             if (!_slots[destinationIndex].IsEmpty) return false;
 
             return SplitStackInternal(index, quantity, destinationIndex);
@@ -1257,7 +1262,9 @@ namespace GI.UnityToolkit.Items
                 for (var i = 0; i < occupied.Count; i++)
                 {
                     var (item, quantity, originalIndex) = occupied[i];
-                    if (originalIndex != i) MarkSlotChanged(i);
+                    if (originalIndex == i) continue;
+
+                    MarkSlotChanged(i);
                     _slots[i].Set(item, quantity);
                 }
 
@@ -1314,7 +1321,7 @@ namespace GI.UnityToolkit.Items
 
         /// <summary>
         /// Whether this inventory accepts <paramref name="item"/> at all, regardless of space.
-        /// Returns true by default; override for filtered containers such as a disc-only bag.
+        /// Returns true by default; override for filtered, item-specific containers.
         /// Consulted by <see cref="CanAdd"/> and <see cref="GetFreeSpaceFor"/>.
         /// </summary>
         protected virtual bool CanAcceptItem(TItem item) => item != null;
@@ -1372,7 +1379,7 @@ namespace GI.UnityToolkit.Items
                 var index = FindOrCreateEmptySlotIndex();
                 if (index < 0) break;
 
-                var toAdd = Math.Min(remaining, item.StackLimit);
+                var toAdd = Math.Min(remaining, item.MaxStackSize);
                 _slots[index].Set(item, toAdd);
                 remaining -= toAdd;
                 MarkSlotChanged(index);
@@ -1452,10 +1459,6 @@ namespace GI.UnityToolkit.Items
             _pendingSlots = _spareSlots ?? new List<int>();
             _spareSlots = null;
 
-            // Unbounded removals shift slots down, so an index recorded earlier in a batch may no
-            // longer exist. Never report one.
-            var slotLimit = _slots.Count;
-
             try
             {
                 for (var i = 0; i < events.Count; i++)
@@ -1472,7 +1475,9 @@ namespace GI.UnityToolkit.Items
                     for (var i = 0; i < slots.Count; i++)
                     {
                         var index = slots[i];
-                        if (index == previous || index >= slotLimit) continue;
+                        // Unbounded removals shift slots down, and handlers may remove more, so an
+                        // index recorded earlier may no longer exist. Check the live count.
+                        if (index == previous || index >= _slots.Count) continue;
                         previous = index;
                         OnSlotChanged?.Invoke(index);
                     }

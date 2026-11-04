@@ -35,7 +35,10 @@ namespace GI.UnityToolkit.Items.Editor
             foreach (var path in paths)
             {
                 if (!path.EndsWith(".asset", StringComparison.OrdinalIgnoreCase)) continue;
-                if (AssetDatabase.LoadAssetAtPath<ItemDefinition>(path) != null) return true;
+
+                // Reads the type only; loading every imported .asset would be costly on a large reimport.
+                var type = AssetDatabase.GetMainAssetTypeAtPath(path);
+                if (type != null && typeof(ItemDefinition).IsAssignableFrom(type)) return true;
             }
 
             return false;

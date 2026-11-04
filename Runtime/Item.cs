@@ -30,11 +30,6 @@ namespace GI.UnityToolkit.Items
         public Guid InstanceId { get; }
 
         /// <summary>
-        /// The edit-time attributes backing this instance. Never null.
-        /// </summary>
-        protected IItemAttributes Attributes => _attributes;
-
-        /// <summary>
         /// Constructs an item from its edit-time attributes.
         /// </summary>
         /// <param name="attributes">The edit-time attributes this instance is built from.</param>
@@ -72,16 +67,12 @@ namespace GI.UnityToolkit.Items
         /// <inheritdoc cref="IItemAttributes.IsStackable"/>
         public bool IsStackable => _attributes.IsStackable;
 
-        /// <inheritdoc cref="IItemAttributes.MaxStackSize"/>
-        public int MaxStackSize => _attributes.MaxStackSize;
-
         /// <summary>
-        /// Units of this item that fit in a single slot: 1 when not stackable, otherwise
-        /// <see cref="MaxStackSize"/> clamped to a minimum of 1. Inventories read this, never
-        /// <see cref="MaxStackSize"/> directly, so a misconfigured definition can never yield a
-        /// zero-capacity slot.
+        /// Units of this item that fit in a single slot: 1 when not stackable, otherwise the
+        /// attributes' <see cref="IItemAttributes.MaxStackSize"/> clamped to a minimum of 1, so a
+        /// misconfigured definition can never yield a zero-capacity slot.
         /// </summary>
-        public int StackLimit => IsStackable ? Math.Max(1, MaxStackSize) : 1;
+        public int MaxStackSize => IsStackable ? Math.Max(1, _attributes.MaxStackSize) : 1;
 
         /// <summary>
         /// Whether this item may share an inventory slot with <paramref name="other"/>.

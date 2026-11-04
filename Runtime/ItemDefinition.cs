@@ -44,6 +44,11 @@ namespace GI.UnityToolkit.Items
             {
                 Debug.LogWarning($"{GetType().Name} '{name}' has no UniqueId. Items need one to stack and be looked up.", this);
             }
+
+            if (!IsStackable && MaxStackSize > 1)
+            {
+                Debug.LogWarning($"{GetType().Name} '{name}' has MaxStackSize {MaxStackSize} but is not stackable, so the stack size is ignored.", this);
+            }
 #endif
         }
     }

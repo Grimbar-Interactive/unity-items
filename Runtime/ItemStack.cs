@@ -23,7 +23,7 @@ namespace GI.UnityToolkit.Items
         public TItem Item { get; private set; }
 
         /// <summary>
-        /// Units held. Zero exactly when <see cref="Item"/> is null; otherwise 1..<see cref="Items.Item.StackLimit"/>.
+        /// Units held. Zero exactly when <see cref="Item"/> is null; otherwise 1..<see cref="Items.Item.MaxStackSize"/>.
         /// </summary>
         public int Quantity { get; private set; }
 
@@ -36,19 +36,21 @@ namespace GI.UnityToolkit.Items
         /// Units that could still be added to this stack. Zero when the slot is empty or already at
         /// or beyond its limit (an item's limit can shrink after it was stacked).
         /// </summary>
-        public int RemainingSpace => IsEmpty ? 0 : Math.Max(0, Item.StackLimit - Quantity);
+        public int RemainingSpace => IsEmpty ? 0 : Math.Max(0, Item.MaxStackSize - Quantity);
 
         /// <summary>
         /// True when the stack has reached its item's stack limit. False when the slot is empty.
         /// </summary>
-        public bool IsFull => !IsEmpty && Quantity >= Item.StackLimit;
+        public bool IsFull => !IsEmpty && Quantity >= Item.MaxStackSize;
 
         internal ItemStack()
         {
         }
 
         /// <summary>
-        /// Replaces the slot's contents wholesale. Clamps to the item's stack limit.
+        /// Replaces the slot's contents wholesale. Does not clamp: callers guarantee the quantity
+        /// fits the item's stack limit, or are relocating an existing stack as-is. Clamping here
+        /// would silently destroy units of a stack that is over-full because its limit shrank.
         /// </summary>
         internal void Set(TItem item, int quantity)
         {
@@ -59,7 +61,7 @@ namespace GI.UnityToolkit.Items
             }
 
             Item = item;
-            Quantity = Math.Min(quantity, item.StackLimit);
+            Quantity = quantity;
         }
 
         /// <summary>

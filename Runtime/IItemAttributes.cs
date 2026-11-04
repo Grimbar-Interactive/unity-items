@@ -36,7 +36,7 @@ namespace GI.UnityToolkit.Items
 
         /// <summary>
         /// Maximum units of this kind in one slot. Ignored when <see cref="IsStackable"/> is false;
-        /// use <see cref="Item.StackLimit"/> for the value an inventory actually honors.
+        /// <see cref="Item.MaxStackSize"/> reports the effective value an inventory actually honors.
         /// </summary>
         int MaxStackSize { get; }
     }

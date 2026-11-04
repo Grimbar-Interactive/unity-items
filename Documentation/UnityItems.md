@@ -35,11 +35,13 @@ var unique = new Inventory<MyItem>(20, allowDuplicates: false); // at most one s
 | `AddRange` | Adds one unit of each item, best effort, as a single batch. Reports what did not fit. |
 | `CanAdd` / `CanRemove` / `GetFreeSpaceFor` | Ask first. `IsFull` only says no *slot* is free; a full inventory can still accept units that stack. `CanRemove` takes an item or a `UniqueId`. |
 
-A non-stackable item (`StackLimit == 1`) can only be added one unit at a time per instance; use `AddRange` with distinct instances. One non-stackable *instance* can occupy only one slot, so adding an instance that is already held is rejected.
+A non-stackable item (`MaxStackSize == 1`) can only be added one unit at a time per instance; use `AddRange` with distinct instances. One non-stackable *instance* can occupy only one slot, so adding an instance that is already held is rejected.
 
 ## Organising slots
 
 `Swap`, `Move` (drag-and-drop: move, merge, or swap), `SplitStack`, `MergeStacks`, `Consolidate`, `Sort`, `Compact`.
+
+`SplitStack` refuses a quantity above the item's stack limit, so a split never creates an over-full stack.
 
 ## Moving between inventories
 
@@ -49,7 +51,7 @@ bag.TryTransferTo(chest, index, 3);       // exactly 3 units, all or nothing
 var moved = bag.TransferUpTo(chest, index, 10); // as many as the chest will take
 ```
 
-The target's own rules decide: stacking, free slots, `allowDuplicates`, and any `CanAcceptItem` override. A failed `TryTransferTo` changes neither inventory and raises no events. On success the target raises `OnItemAdded` and the source raises `OnItemRemoved`, each followed by its own slot and update events (target first). Transferring to the same inventory throws; use `Move`.
+The target's own rules decide: stacking, free slots, `allowDuplicates`, and any `CanAcceptItem` override. A failed `TryTransferTo` changes neither inventory and raises no events. On success the target raises `OnItemAdded` and the source raises `OnItemRemoved`, each followed by its own slot and update events (target first), but both inventories are already fully updated by the time any handler runs. Transferring to the same inventory throws; use `Move`.
 
 Enumerating an inventory (`foreach`, `Items`, `FindAll`) throws `InvalidOperationException` if the inventory changes mid-loop, like `List<T>`. Copy what you need first, then mutate:
 

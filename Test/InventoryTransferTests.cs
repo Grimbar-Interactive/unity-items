@@ -266,6 +266,36 @@ namespace GI.UnityToolkit.Items.Test
             Assert.AreEqual(2, sourceEvents.RemovedCount);
         }
 
+        [Test]
+        public void TryTransferTo_TargetHandlerSeesSourceAlreadyUpdated()
+        {
+            var source = new Inventory<TestItem>(3);
+            var target = new Inventory<TestItem>(3);
+            source.TryAdd(TestItems.Stackable("potion", max: 10), 6);
+            var sourceQuantitySeen = -1;
+            target.OnItemAdded += (_, _) => sourceQuantitySeen = source.GetQuantity("potion");
+
+            source.TryTransferTo(target, 0, 4);
+
+            Assert.AreEqual(2, sourceQuantitySeen);
+        }
+
+        [Test]
+        public void TryTransferTo_TargetHandlerThatClearsUnboundedSource_DoesNotThrowOrCorrupt()
+        {
+            var source = new Inventory<TestItem>();
+            var target = new Inventory<TestItem>(3);
+            var a = TestItems.NonStackable("a");
+            source.TryAdd(a);
+            source.TryAdd(TestItems.NonStackable("b"));
+            target.OnItemAdded += (_, _) => source.Clear();
+
+            Assert.DoesNotThrow(() => source.TryTransferTo(target, 0));
+
+            Assert.IsTrue(source.IsEmpty);
+            Assert.IsTrue(target.Contains(a));
+        }
+
         // ---- TransferUpTo ----
 
         [Test]

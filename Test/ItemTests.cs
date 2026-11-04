@@ -61,26 +61,33 @@ namespace GI.UnityToolkit.Items.Test
         }
 
         [Test]
-        public void StackLimit_NonStackable_IsOne()
+        public void MaxStackSize_NonStackable_IsOne()
         {
             var item = TestItems.NonStackable();
-            Assert.AreEqual(1, item.StackLimit);
+            Assert.AreEqual(1, item.MaxStackSize);
         }
 
         [Test]
-        public void StackLimit_Stackable_IsMaxStackSize()
+        public void MaxStackSize_NonStackableWithLargerConfiguredSize_IsOne()
+        {
+            var item = new TestItem(new FakeItemAttributes("disc", isStackable: false, maxStackSize: 5));
+            Assert.AreEqual(1, item.MaxStackSize);
+        }
+
+        [Test]
+        public void MaxStackSize_Stackable_IsConfiguredValue()
         {
             var item = TestItems.Stackable(max: 7);
-            Assert.AreEqual(7, item.StackLimit);
+            Assert.AreEqual(7, item.MaxStackSize);
         }
 
         [TestCase(0)]
         [TestCase(-1)]
         [TestCase(int.MinValue)]
-        public void StackLimit_StackableWithInvalidMaxStackSize_ClampsToOne(int maxStackSize)
+        public void MaxStackSize_StackableWithInvalidConfiguredSize_ClampsToOne(int maxStackSize)
         {
             var item = new TestItem(new FakeItemAttributes("disc", isStackable: true, maxStackSize: maxStackSize));
-            Assert.AreEqual(1, item.StackLimit);
+            Assert.AreEqual(1, item.MaxStackSize);
         }
 
         [Test]

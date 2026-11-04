@@ -3,6 +3,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [1.1.1] - 2026-11-03
+### Fixed
+- `Move`, `Compact`, `Sort` and `SplitStack` silently destroyed units from a stack that was over-full because its item's stack limit had shrunk; `Sort` did so for every over-full stack even if nothing moved. `ItemStack.Set` no longer clamps, and `SplitStack` now refuses a quantity above the stack limit.
+- `TryTransferTo` / `TransferUpTo` raised the target's events before the source was updated, so a target handler saw the units in both inventories, and one that mutated the source could throw or corrupt the transfer. Both inventories are now updated before either raises events.
+- `OnSlotChanged` could report an index that no longer existed when a handler shrank an unbounded inventory during the flush.
+
+### Changed
+- The editor duplicate-id postprocessor no longer loads every imported `.asset`; it checks the asset type only.
+- `ItemDefinition.OnValidate` warns when `MaxStackSize` is above 1 on an item that is not stackable.
+
 ## [1.1.0] - 2026-11-03
 ### Added
 - `Inventory.TryTransferTo` / `TransferUpTo`: move a stack, an exact quantity, or as much as fits into another inventory, honouring the target's stacking, capacity, `allowDuplicates` and `CanAcceptItem`.
