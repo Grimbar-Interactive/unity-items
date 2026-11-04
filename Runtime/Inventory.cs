@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Runtime.ExceptionServices;
 
 // ReSharper disable ForCanBeConvertedToForeach
 // ReSharper disable LoopCanBeConvertedToQuery
@@ -27,7 +28,7 @@ namespace GI.UnityToolkit.Items
     /// <see cref="IItemAttributes.UniqueId"/>, not its object graph.</para>
     /// </remarks>
     /// <typeparam name="TItem">The item type this inventory holds.</typeparam>
-    public class Inventory<TItem> : IEnumerable<TItem> where TItem : Item
+    public class Inventory<TItem> : IReadOnlyInventory<TItem>, IInventoryEventSink<TItem> where TItem : Item
     {
         /// <summary>
         /// Signature for events that report an item and a number of units.
@@ -41,29 +42,9 @@ namespace GI.UnityToolkit.Items
 
         private readonly List<ItemStack<TItem>> _slots;
 
-        // Pending notifications are held in plain lists and flushed through swap-in spare buffers, so
-        // a steady-state add/remove allocates nothing and a flush stays safe against re-entrancy.
-        private List<PendingItemEvent> _pendingItemEvents = new();
-        private List<PendingItemEvent> _spareItemEvents;
-        private List<int> _pendingSlots = new();
-        private List<int> _spareSlots;
-        private bool _pendingInventoryUpdated;
-        private int _batchDepth;
-        private int _version;
-
-        private readonly struct PendingItemEvent
-        {
-            public readonly bool Added;
-            public readonly TItem Item;
-            public readonly int Quantity;
-
-            public PendingItemEvent(bool added, TItem item, int quantity)
-            {
-                Added = added;
-                Item = item;
-                Quantity = quantity;
-            }
-        }
+        // Batching and event coalescing live in the shared queue; this class enqueues and the queue
+        // calls back through IInventoryEventSink once the outermost batch closes.
+        private readonly InventoryEventQueue<TItem> _events;
 
         /// <summary>
         /// Raised once per logical add with the item and the total units added, even when those units
@@ -97,6 +78,27 @@ namespace GI.UnityToolkit.Items
         /// </summary>
         public event Action OnInventoryUpdated;
 
+        // Raised after every public event of a flush, even when a public handler throws. Linked
+        // inventories follow their source through this rather than OnInventoryUpdated. The count
+        // lets the common single-loadout case dispatch directly without allocating.
+        private Action _synchronize;
+        private int _synchronizeCount;
+
+        internal event Action Synchronize
+        {
+            add
+            {
+                _synchronize += value;
+                _synchronizeCount++;
+            }
+            remove
+            {
+                var before = _synchronize;
+                _synchronize -= value;
+                if (!ReferenceEquals(before, _synchronize)) _synchronizeCount--;
+            }
+        }
+
         /// <summary>
         /// Constructs an inventory.
         /// </summary>
@@ -111,6 +113,7 @@ namespace GI.UnityToolkit.Items
 
             MaxSlotCount = maxSlotCount;
             AllowDuplicates = allowDuplicates;
+            _events = new InventoryEventQueue<TItem>(this);
             _slots = new List<ItemStack<TItem>>();
             Slots = _slots.AsReadOnly();
 
@@ -144,6 +147,11 @@ namespace GI.UnityToolkit.Items
         /// empty slots.
         /// </summary>
         public IReadOnlyList<ItemStack<TItem>> Slots { get; }
+
+        // IReadOnlyList<T> is covariant, so the concrete slot list is its own read-only-stack view.
+        IReadOnlyList<IReadOnlyItemStack<TItem>> IReadOnlyInventory<TItem>.Slots => Slots;
+
+        IReadOnlyItemStack<TItem> IReadOnlyInventory<TItem>.this[int index] => this[index];
 
         /// <summary>
         /// Gets the slot at <paramref name="index"/>. Never null; may be empty.
@@ -773,12 +781,12 @@ namespace GI.UnityToolkit.Items
 
         private IEnumerable<TItem> EnumerateItems()
         {
-            var version = _version;
+            var version = _events.Version;
             var index = 0;
 
             while (true)
             {
-                if (version != _version)
+                if (version != _events.Version)
                 {
                     throw new InvalidOperationException("The inventory was modified during enumeration.");
                 }
@@ -1332,7 +1340,7 @@ namespace GI.UnityToolkit.Items
         /// Suppresses and coalesces events until the returned handle is disposed, so a run of
         /// operations reports as one change. Reentrant: only the outermost scope flushes.
         /// </summary>
-        public IDisposable BeginBatchUpdate() => new BatchScope(this);
+        public IDisposable BeginBatchUpdate() => _events.BeginBatchScope();
 
         /// <summary>
         /// Whether this inventory accepts <paramref name="item"/> at all, regardless of space.
@@ -1352,7 +1360,7 @@ namespace GI.UnityToolkit.Items
         /// </summary>
         private void RemoveUnboundedSlot(int index)
         {
-            _version++;
+            _events.Version++;
             _slots.RemoveAt(index);
             for (var j = index; j < _slots.Count; j++) MarkSlotChanged(j);
         }
@@ -1378,7 +1386,6 @@ namespace GI.UnityToolkit.Items
             {
                 var slot = _slots[i];
                 if (slot.IsEmpty || !item.CanStackWith(slot.Item)) continue;
-                if (!string.Equals(slot.Item.UniqueId, item.UniqueId, StringComparison.Ordinal)) continue;
 
                 var added = slot.Add(remaining);
                 if (added <= 0) continue;
@@ -1433,126 +1440,51 @@ namespace GI.UnityToolkit.Items
             if (removedItemSample != null) EnqueueItemRemoved(removedItemSample, quantity);
         }
 
-        private void EnqueueItemAdded(TItem item, int quantity)
+        private void EnqueueItemAdded(TItem item, int quantity) => _events.EnqueueItemAdded(item, quantity);
+
+        private void EnqueueItemRemoved(TItem item, int quantity) => _events.EnqueueItemRemoved(item, quantity);
+
+        private void MarkSlotChanged(int index) => _events.MarkSlotChanged(index);
+
+        private InventoryEventQueue<TItem>.Batch OpenBatch() => _events.OpenBatch();
+
+        int IInventoryEventSink<TItem>.SlotCount => _slots.Count;
+
+        void IInventoryEventSink<TItem>.RaiseItemAdded(TItem item, int quantity) => OnItemAdded?.Invoke(item, quantity);
+
+        void IInventoryEventSink<TItem>.RaiseItemRemoved(TItem item, int quantity) => OnItemRemoved?.Invoke(item, quantity);
+
+        void IInventoryEventSink<TItem>.RaiseSlotChanged(int index) => OnSlotChanged?.Invoke(index);
+
+        void IInventoryEventSink<TItem>.RaiseInventoryUpdated() => OnInventoryUpdated?.Invoke();
+
+        void IInventoryEventSink<TItem>.RaiseSynchronize()
         {
-            _version++;
-            _pendingItemEvents.Add(new PendingItemEvent(true, item, quantity));
-            _pendingInventoryUpdated = true;
-        }
+            var handler = _synchronize;
+            if (handler == null) return;
 
-        private void EnqueueItemRemoved(TItem item, int quantity)
-        {
-            _version++;
-            _pendingItemEvents.Add(new PendingItemEvent(false, item, quantity));
-            _pendingInventoryUpdated = true;
-        }
-
-        private void MarkSlotChanged(int index)
-        {
-            _version++;
-
-            // Duplicates are collapsed at flush time; skipping an immediate repeat keeps hot loops small.
-            var pending = _pendingSlots;
-            if (pending.Count == 0 || pending[pending.Count - 1] != index) pending.Add(index);
-            _pendingInventoryUpdated = true;
-        }
-
-        private void FlushPending()
-        {
-            var events = _pendingItemEvents;
-            var slots = _pendingSlots;
-            var updated = _pendingInventoryUpdated;
-            _pendingInventoryUpdated = false;
-
-            if (events.Count == 0 && slots.Count == 0 && !updated) return;
-
-            // Hand fresh (or recycled) buffers to the inventory before raising anything, so a
-            // handler that mutates the inventory (re-entrancy) or throws cannot corrupt or leak
-            // this flush. The buffers being raised from are recycled once the flush ends.
-            _pendingItemEvents = _spareItemEvents ?? new List<PendingItemEvent>();
-            _spareItemEvents = null;
-            _pendingSlots = _spareSlots ?? new List<int>();
-            _spareSlots = null;
-
-            try
+            if (_synchronizeCount == 1)
             {
-                for (var i = 0; i < events.Count; i++)
+                handler();
+                return;
+            }
+
+            // Every dependent must reconcile even if an earlier one throws; surface the first
+            // exception only after all of them have run.
+            ExceptionDispatchInfo first = null;
+            foreach (var each in handler.GetInvocationList())
+            {
+                try
                 {
-                    var pending = events[i];
-                    if (pending.Added) OnItemAdded?.Invoke(pending.Item, pending.Quantity);
-                    else OnItemRemoved?.Invoke(pending.Item, pending.Quantity);
+                    ((Action)each)();
                 }
-
-                if (slots.Count > 0)
+                catch (Exception e)
                 {
-                    slots.Sort();
-                    var previous = -1;
-                    for (var i = 0; i < slots.Count; i++)
-                    {
-                        var index = slots[i];
-                        // Unbounded removals shift slots down, and handlers may remove more, so an
-                        // index recorded earlier may no longer exist. Check the live count.
-                        if (index == previous || index >= _slots.Count) continue;
-                        previous = index;
-                        OnSlotChanged?.Invoke(index);
-                    }
+                    first ??= ExceptionDispatchInfo.Capture(e);
                 }
-
-                if (updated) OnInventoryUpdated?.Invoke();
-            }
-            finally
-            {
-                events.Clear();
-                slots.Clear();
-                _spareItemEvents = events;
-                _spareSlots = slots;
-            }
-        }
-
-        private Batch OpenBatch() => new Batch(this);
-
-        /// <summary>
-        /// Allocation-free batch scope for internal operations. Not idempotent - dispose exactly once,
-        /// which <c>using</c> guarantees. The public <see cref="BeginBatchUpdate"/> hands out the
-        /// idempotent <see cref="BatchScope"/> class instead.
-        /// </summary>
-        private readonly struct Batch : IDisposable
-        {
-            private readonly Inventory<TItem> _inventory;
-
-            public Batch(Inventory<TItem> inventory)
-            {
-                _inventory = inventory;
-                inventory._batchDepth++;
             }
 
-            public void Dispose()
-            {
-                _inventory._batchDepth--;
-                if (_inventory._batchDepth == 0) _inventory.FlushPending();
-            }
-        }
-
-        private sealed class BatchScope : IDisposable
-        {
-            private readonly Inventory<TItem> _inventory;
-            private bool _disposed;
-
-            public BatchScope(Inventory<TItem> inventory)
-            {
-                _inventory = inventory;
-                _inventory._batchDepth++;
-            }
-
-            public void Dispose()
-            {
-                // Idempotent: a second Dispose must not unbalance the depth counter.
-                if (_disposed) return;
-                _disposed = true;
-
-                _inventory._batchDepth--;
-                if (_inventory._batchDepth == 0) _inventory.FlushPending();
-            }
+            first?.Throw();
         }
     }
 }

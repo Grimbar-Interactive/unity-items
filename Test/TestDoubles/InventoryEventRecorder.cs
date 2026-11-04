@@ -5,7 +5,7 @@ namespace GI.UnityToolkit.Items.Test
 {
     internal sealed class InventoryEventRecorder<TItem> : IDisposable where TItem : Item
     {
-        private readonly Inventory<TItem> _inventory;
+        private readonly IReadOnlyInventory<TItem> _inventory;
 
         public List<(TItem Item, int Quantity)> Added { get; } = new();
         public List<(TItem Item, int Quantity)> Removed { get; } = new();
@@ -17,7 +17,7 @@ namespace GI.UnityToolkit.Items.Test
         public int SlotChangedCount => ChangedSlots.Count;
         public int UpdatedCount { get; private set; }
 
-        public InventoryEventRecorder(Inventory<TItem> inventory)
+        public InventoryEventRecorder(IReadOnlyInventory<TItem> inventory)
         {
             _inventory = inventory;
             _inventory.OnItemAdded += HandleItemAdded;

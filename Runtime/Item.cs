@@ -27,6 +27,7 @@ namespace GI.UnityToolkit.Items
     {
         private readonly IItemAttributes _attributes;
         private readonly Guid _instanceId;
+        private readonly bool _isStackable;
 
         /// <summary>
         /// Identifies this specific object, or null when the item is stackable. Unique per
@@ -36,11 +37,12 @@ namespace GI.UnityToolkit.Items
         /// </summary>
         /// <remarks>
         /// Stackable items are fungible, so they carry no identity: stacking merges units without
-        /// keeping the incoming item, and one stackable reference may fill several slots. The value
-        /// follows <see cref="IsStackable"/> live, so if an attributes object's
-        /// <see cref="IItemAttributes.MaxStackSize"/> changes at runtime, so does this.
+        /// keeping the incoming item, and one stackable reference may fill several slots. Whether an
+        /// item is stackable is decided once, at construction, so this never changes for the
+        /// lifetime of the object even if the attributes' <see cref="IItemAttributes.MaxStackSize"/>
+        /// does. Flipping identity mid-life would leave one id in several slots.
         /// </remarks>
-        public Guid? InstanceId => IsStackable ? null : _instanceId;
+        public Guid? InstanceId => _isStackable ? null : _instanceId;
 
         /// <summary>
         /// Constructs an item from its edit-time attributes.
@@ -66,6 +68,7 @@ namespace GI.UnityToolkit.Items
             _attributes = attributes ?? throw new ArgumentNullException(nameof(attributes));
             if (instanceId == Guid.Empty) throw new ArgumentException("Instance id must not be empty.", nameof(instanceId));
             _instanceId = instanceId;
+            _isStackable = attributes.MaxStackSize > 1;
         }
 
         /// <inheritdoc cref="IItemAttributes.UniqueId"/>
@@ -81,17 +84,20 @@ namespace GI.UnityToolkit.Items
         public Sprite Icon => _attributes.Icon;
 
         /// <summary>
-        /// Whether more than one unit may share a slot: true exactly when <see cref="MaxStackSize"/>
-        /// is above 1. Not overridable, so every stacking decision agrees.
+        /// Whether more than one unit may share a slot: true exactly when the attributes'
+        /// <see cref="IItemAttributes.MaxStackSize"/> was above 1 when the item was constructed.
+        /// Fixed for the item's lifetime and not overridable, so every stacking decision agrees.
         /// </summary>
-        public bool IsStackable => MaxStackSize > 1;
+        public bool IsStackable => _isStackable;
 
         /// <summary>
         /// Units of this item that fit in a single slot: the attributes'
         /// <see cref="IItemAttributes.MaxStackSize"/> clamped to a minimum of 1, so a misconfigured
-        /// definition can never yield a zero-capacity slot.
+        /// definition can never yield a zero-capacity slot. The limit of a stackable item may change
+        /// at runtime (stacks above a shrunken limit simply have no room left); a non-stackable item
+        /// is always 1, even if its attributes later grow.
         /// </summary>
-        public int MaxStackSize => Math.Max(1, _attributes.MaxStackSize);
+        public int MaxStackSize => _isStackable ? Math.Max(1, _attributes.MaxStackSize) : 1;
 
         /// <summary>
         /// Whether this item may share an inventory slot with <paramref name="other"/>.

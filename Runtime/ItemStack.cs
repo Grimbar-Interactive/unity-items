@@ -15,7 +15,7 @@ namespace GI.UnityToolkit.Items
     /// </para>
     /// </remarks>
     /// <typeparam name="TItem">The item type this slot may hold.</typeparam>
-    public class ItemStack<TItem> where TItem : Item
+    public class ItemStack<TItem> : IReadOnlyItemStack<TItem> where TItem : Item
     {
         /// <summary>
         /// The item held, or null when the slot is empty.

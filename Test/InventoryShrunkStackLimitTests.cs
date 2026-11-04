@@ -98,6 +98,59 @@ namespace GI.UnityToolkit.Items.Test
         }
 
         [Test]
+        public void LimitShrinksToOne_StackableItemStaysStackableAndFungible()
+        {
+            var attributes = new MutableAttributes { UniqueId = "potion", MaxStackSize = 10 };
+            var inventory = new Inventory<TestItem>(3);
+            var item = new TestItem(attributes);
+            inventory.TryAdd(item, 15); // one reference in two slots
+
+            attributes.MaxStackSize = 1;
+
+            Assert.IsTrue(item.IsStackable);
+            Assert.IsNull(item.InstanceId);
+            Assert.AreEqual(-1, inventory.IndexOfInstance(item));
+            Assert.AreEqual(0, inventory[0].RemainingSpace);
+            Assert.AreEqual(15, inventory.GetQuantity("potion"));
+            Assert.IsTrue(inventory.TryRemove("potion", 15));
+            Assert.IsTrue(inventory.IsEmpty);
+        }
+
+        [Test]
+        public void LimitGrowsFromOne_NonStackableItemStaysNonStackable()
+        {
+            var attributes = new MutableAttributes { UniqueId = "sword", MaxStackSize = 1 };
+            var inventory = new Inventory<TestItem>(2);
+            var item = new TestItem(attributes);
+            inventory.TryAdd(item);
+            var instanceId = item.InstanceId;
+
+            attributes.MaxStackSize = 5;
+
+            Assert.IsFalse(item.IsStackable);
+            Assert.AreEqual(1, item.MaxStackSize);
+            Assert.AreEqual(instanceId, item.InstanceId);
+            Assert.AreEqual(0, inventory[0].RemainingSpace);
+            Assert.AreEqual(0, inventory.GetFreeSpaceFor(item));
+        }
+
+        [Test]
+        public void LimitShrinksToOne_LinkedInventoryStillTrimsByQuantity()
+        {
+            var attributes = new MutableAttributes { UniqueId = "potion", MaxStackSize = 10 };
+            var source = new Inventory<TestItem>();
+            var item = new TestItem(attributes);
+            source.TryAdd(item, 15);
+            var linked = new LinkedInventory<TestItem>(source);
+            linked.TryAdd(item, 15); // slots of 10 and 5
+
+            attributes.MaxStackSize = 1;
+            source.TryRemove("potion", 3);
+
+            Assert.AreEqual(12, linked.GetQuantity("potion"));
+        }
+
+        [Test]
         public void SplitStack_WithinStackLimit_StillSucceeds()
         {
             var inventory = OverfullInventory();

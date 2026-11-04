@@ -3,6 +3,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [1.2.1] - 2026-11-04
+### Fixed
+- A `LinkedInventory` could be left claiming units its source no longer held when an event handler on the source threw: the source's `OnInventoryUpdated` never fired, so the loadout never reconciled. The loadout now follows the source through an internal notification that is raised after the public events even if a handler throws. As a result it reconciles after all public source handlers, not in subscription order. A loadout whose own handler throws no longer stops other loadouts on the same source from reconciling: every loadout is notified, then the first exception is rethrown.
+- Whether an `Item` is stackable is now decided when it is constructed. Previously a stack limit that changed across 1 at runtime (for example editing a definition in play mode) changed `IsStackable` and `InstanceId` on live items, so one stackable reference spread over several slots suddenly had the same `InstanceId` in each, breaking instance lookup, removal and saves. A stackable item whose limit later shrinks to 1 now stays fungible with no room left; a non-stackable item stays at 1 if its limit grows.
+
 ## [1.2.0] - 2026-11-04
 ### Changed
 - Stackability now comes from one place: an item is stackable exactly when `MaxStackSize` is above 1. `IsStackable` is removed from `IItemAttributes` and from `ItemDefinition` (where it was a serialized field); `Item.IsStackable` is derived and cannot be overridden. `ItemDefinition.MaxStackSize` is clamped to at least 1.
