@@ -15,7 +15,22 @@ namespace GI.UnityToolkit.Items.Test
         public void Constructor_AssignsInstanceId()
         {
             var item = TestItems.NonStackable();
-            Assert.AreNotEqual(Guid.Empty, item.InstanceId);
+            Assert.IsTrue(item.InstanceId.HasValue);
+            Assert.AreNotEqual(Guid.Empty, item.InstanceId.Value);
+        }
+
+        [Test]
+        public void InstanceId_Stackable_IsNull()
+        {
+            var item = TestItems.Stackable("potion", max: 10);
+            Assert.IsNull(item.InstanceId);
+        }
+
+        [Test]
+        public void Constructor_WithInstanceId_Stackable_InstanceIdIsNull()
+        {
+            var item = new TestItem(new FakeItemAttributes("potion", maxStackSize: 10), Guid.NewGuid());
+            Assert.IsNull(item.InstanceId);
         }
 
         [Test]
@@ -49,7 +64,7 @@ namespace GI.UnityToolkit.Items.Test
         [Test]
         public void Attributes_AreForwardedFromSource()
         {
-            var attributes = new FakeItemAttributes("disc", isStackable: true, maxStackSize: 5, name: "Disc", description: "A disc");
+            var attributes = new FakeItemAttributes("disc", maxStackSize: 5, name: "Disc", description: "A disc");
             var item = new TestItem(attributes);
 
             Assert.AreEqual("disc", item.UniqueId);
@@ -68,10 +83,25 @@ namespace GI.UnityToolkit.Items.Test
         }
 
         [Test]
-        public void MaxStackSize_NonStackableWithLargerConfiguredSize_IsOne()
+        public void IsStackable_MaxStackSizeOne_IsFalse()
         {
-            var item = new TestItem(new FakeItemAttributes("disc", isStackable: false, maxStackSize: 5));
-            Assert.AreEqual(1, item.MaxStackSize);
+            var item = new TestItem(new FakeItemAttributes("disc", maxStackSize: 1));
+            Assert.IsFalse(item.IsStackable);
+        }
+
+        [Test]
+        public void IsStackable_MaxStackSizeAboveOne_IsTrue()
+        {
+            var item = new TestItem(new FakeItemAttributes("disc", maxStackSize: 2));
+            Assert.IsTrue(item.IsStackable);
+        }
+
+        [Test]
+        public void MaxStackSize_IntMaxValue_IsPreserved()
+        {
+            var item = new TestItem(new FakeItemAttributes("disc", maxStackSize: int.MaxValue));
+            Assert.AreEqual(int.MaxValue, item.MaxStackSize);
+            Assert.IsTrue(item.IsStackable);
         }
 
         [Test]
@@ -84,10 +114,11 @@ namespace GI.UnityToolkit.Items.Test
         [TestCase(0)]
         [TestCase(-1)]
         [TestCase(int.MinValue)]
-        public void MaxStackSize_StackableWithInvalidConfiguredSize_ClampsToOne(int maxStackSize)
+        public void MaxStackSize_InvalidConfiguredSize_ClampsToOneAndIsNotStackable(int maxStackSize)
         {
-            var item = new TestItem(new FakeItemAttributes("disc", isStackable: true, maxStackSize: maxStackSize));
+            var item = new TestItem(new FakeItemAttributes("disc", maxStackSize: maxStackSize));
             Assert.AreEqual(1, item.MaxStackSize);
+            Assert.IsFalse(item.IsStackable);
         }
 
         [Test]
@@ -140,7 +171,7 @@ namespace GI.UnityToolkit.Items.Test
         [Test]
         public void CanStackWith_Override_RequiresMatchingState()
         {
-            var attributes = new FakeItemAttributes("disc", isStackable: true, maxStackSize: 10);
+            var attributes = new FakeItemAttributes("disc", maxStackSize: 10);
             var worn = new DurabilityTestItem(attributes, durability: 40);
             var pristine = new DurabilityTestItem(attributes, durability: 100);
 

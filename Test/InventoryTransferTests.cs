@@ -71,8 +71,8 @@ namespace GI.UnityToolkit.Items.Test
 
             Assert.IsTrue(source.TryTransferTo(target, 0));
 
-            Assert.IsFalse(source.Contains(sword));
-            Assert.IsTrue(target.Contains(sword));
+            Assert.IsFalse(source.ContainsInstance(sword));
+            Assert.IsTrue(target.ContainsInstance(sword));
         }
 
         [Test]
@@ -293,7 +293,7 @@ namespace GI.UnityToolkit.Items.Test
             Assert.DoesNotThrow(() => source.TryTransferTo(target, 0));
 
             Assert.IsTrue(source.IsEmpty);
-            Assert.IsTrue(target.Contains(a));
+            Assert.IsTrue(target.ContainsInstance(a));
         }
 
         // ---- TransferUpTo ----

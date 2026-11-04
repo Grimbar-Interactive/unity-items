@@ -92,9 +92,9 @@ namespace GI.UnityToolkit.Items.Test
             {
                 foreach (var item in inventory)
                 {
-                    inventory.Contains(item);
+                    inventory.ContainsInstance(item);
                     inventory.GetQuantity(item);
-                    inventory.IndexOf(item);
+                    inventory.IndexOfInstance(item);
                 }
             });
         }

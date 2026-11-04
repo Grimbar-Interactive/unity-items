@@ -16,7 +16,6 @@ namespace GI.UnityToolkit.Items.Test
             public string Name => null;
             public string Description => null;
             public Sprite Icon => null;
-            public bool IsStackable => true;
             public int MaxStackSize { get; set; }
         }
 

@@ -20,9 +20,6 @@ namespace GI.UnityToolkit.Items
         /// <inheritdoc cref="IItemAttributes.Icon"/>
         [field: SerializeField] public Sprite Icon { get; private set; }
 
-        /// <inheritdoc cref="IItemAttributes.IsStackable"/>
-        [field: SerializeField] public virtual bool IsStackable { get; private set; }
-
         /// <inheritdoc cref="IItemAttributes.MaxStackSize"/>
         [field: SerializeField, Min(1)] public virtual int MaxStackSize { get; private set; } = 1;
 
@@ -45,10 +42,7 @@ namespace GI.UnityToolkit.Items
                 Debug.LogWarning($"{GetType().Name} '{name}' has no UniqueId. Items need one to stack and be looked up.", this);
             }
 
-            if (!IsStackable && MaxStackSize > 1)
-            {
-                Debug.LogWarning($"{GetType().Name} '{name}' has MaxStackSize {MaxStackSize} but is not stackable, so the stack size is ignored.", this);
-            }
+            if (MaxStackSize < 1) MaxStackSize = 1;
 #endif
         }
     }

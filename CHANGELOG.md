@@ -3,6 +3,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [1.2.0] - 2026-11-04
+### Changed
+- Stackability now comes from one place: an item is stackable exactly when `MaxStackSize` is above 1. `IsStackable` is removed from `IItemAttributes` and from `ItemDefinition` (where it was a serialized field); `Item.IsStackable` is derived and cannot be overridden. `ItemDefinition.MaxStackSize` is clamped to at least 1.
+- `Item.InstanceId` is now `Guid?` and is null for stackable items. Stackable items are fungible: stacking merges units without keeping the incoming item, and one reference may fill several slots, so they carry no identity. Compare stackables by `UniqueId`, non-stackables by `InstanceId`.
+- `Inventory.IndexOf(TItem)` is renamed `IndexOfInstance(TItem)` and `Contains(TItem)` is renamed `ContainsInstance(TItem)`. They match by `InstanceId` and never match a stackable item. `TryRemoveInstance` and `TryFindByInstanceId` follow the same rule.
+
+### Fixed
+- A non-stackable item could be added twice when a distinct object carried the same `InstanceId` (for example a save restored twice); duplicates were detected by object reference. They are now detected by `InstanceId` in `TryAdd`, `AddUpTo`, `AddRange`, `TryAddAt` and transfers.
+
+### Migration
+- Remove `isStackable` / `IsStackable` implementations from your `IItemAttributes` types.
+- `ItemDefinition` assets that had `IsStackable` off but `MaxStackSize` above 1 now stack. Set `MaxStackSize` to 1 on those assets.
+- Replace `inventory.IndexOf(item)` / `inventory.Contains(item)` with `IndexOfInstance(item)` / `ContainsInstance(item)`, and handle `InstanceId` being null.
+
 ## [1.1.1] - 2026-11-03
 ### Fixed
 - `Move`, `Compact`, `Sort` and `SplitStack` silently destroyed units from a stack that was over-full because its item's stack limit had shrunk; `Sort` did so for every over-full stack even if nothing moved. `ItemStack.Set` no longer clamps, and `SplitStack` now refuses a quantity above the stack limit.

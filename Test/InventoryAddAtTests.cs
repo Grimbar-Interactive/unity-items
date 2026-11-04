@@ -162,7 +162,7 @@ namespace GI.UnityToolkit.Items.Test
         [Test]
         public void TryAddAt_OccupiedSlot_ItemsThatRefuseToStack_Rejected()
         {
-            var attributes = new FakeItemAttributes("blade", isStackable: true, maxStackSize: 10);
+            var attributes = new FakeItemAttributes("blade", maxStackSize: 10);
             var inventory = new Inventory<DurabilityTestItem>(5);
             inventory.TryAdd(new DurabilityTestItem(attributes, 100), 2);
 

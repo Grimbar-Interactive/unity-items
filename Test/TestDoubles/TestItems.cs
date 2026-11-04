@@ -6,7 +6,7 @@ namespace GI.UnityToolkit.Items.Test
     {
         public static TestItem Stackable(string id = "stackable", int max = 10)
         {
-            return new TestItem(new FakeItemAttributes(id, isStackable: true, maxStackSize: max));
+            return new TestItem(new FakeItemAttributes(id, maxStackSize: max));
         }
 
         public static TestItem NonStackable(string id = "unique")

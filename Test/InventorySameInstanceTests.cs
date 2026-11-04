@@ -1,12 +1,102 @@
+using System;
 using NUnit.Framework;
 
 namespace GI.UnityToolkit.Items.Test
 {
     /// <summary>
-    /// One object reference (one InstanceId) may occupy at most one slot when it is non-stackable.
+    /// One InstanceId may occupy at most one slot when its item is non-stackable, whether the
+    /// second candidate is the same object or a distinct object carrying the same id. Stackable
+    /// items have no InstanceId and are never matched by instance.
     /// </summary>
     public class InventorySameInstanceTests
     {
+        private static (TestItem First, TestItem Second) TwinsWithSameInstanceId(string uniqueId = "sword")
+        {
+            var attributes = new FakeItemAttributes(uniqueId);
+            var id = Guid.NewGuid();
+            return (new TestItem(attributes, id), new TestItem(attributes, id));
+        }
+
+        [Test]
+        public void TryAdd_DistinctObjectWithSameInstanceId_IsRejected()
+        {
+            var inventory = new Inventory<TestItem>(5);
+            var (first, second) = TwinsWithSameInstanceId();
+            inventory.TryAdd(first);
+
+            Assert.IsFalse(inventory.TryAdd(second));
+            Assert.AreEqual(1, inventory.FilledSlotCount);
+        }
+
+        [Test]
+        public void TryAddAt_DistinctObjectWithSameInstanceId_IsRejected()
+        {
+            var inventory = new Inventory<TestItem>(5);
+            var (first, second) = TwinsWithSameInstanceId();
+            inventory.TryAddAt(0, first);
+
+            Assert.IsFalse(inventory.TryAddAt(3, second));
+            Assert.IsTrue(inventory[3].IsEmpty);
+        }
+
+        [Test]
+        public void AddRange_DistinctObjectsWithSameInstanceId_ReportsSecondAsNotAdded()
+        {
+            var inventory = new Inventory<TestItem>(5);
+            var (first, second) = TwinsWithSameInstanceId();
+
+            var added = inventory.AddRange(new[] { first, second }, out var notAdded);
+
+            Assert.AreEqual(1, added);
+            Assert.AreEqual(1, notAdded.Count);
+            Assert.AreSame(second, notAdded[0]);
+        }
+
+        [Test]
+        public void TryTransferTo_TargetHoldsSameInstanceId_FailsAndChangesNothing()
+        {
+            var source = new Inventory<TestItem>(3);
+            var target = new Inventory<TestItem>(3);
+            var (first, second) = TwinsWithSameInstanceId();
+            source.TryAdd(first);
+            target.TryAdd(second);
+            using var recorder = new InventoryEventRecorder<TestItem>(target);
+
+            Assert.IsFalse(source.TryTransferTo(target, 0));
+
+            Assert.IsTrue(source.ContainsInstance(first));
+            Assert.AreEqual(1, target.FilledSlotCount);
+            Assert.AreEqual(0, recorder.UpdatedCount);
+        }
+
+        [Test]
+        public void InstanceLookups_Stackable_NeverMatch()
+        {
+            var inventory = new Inventory<TestItem>(5);
+            var potion = TestItems.Stackable("potion", max: 10);
+            inventory.TryAdd(potion, 3);
+            using var recorder = new InventoryEventRecorder<TestItem>(inventory);
+
+            Assert.AreEqual(-1, inventory.IndexOfInstance(potion));
+            Assert.IsFalse(inventory.ContainsInstance(potion));
+            Assert.IsFalse(inventory.TryRemoveInstance(potion));
+
+            Assert.AreEqual(3, inventory.GetQuantity("potion"));
+            Assert.AreEqual(0, recorder.UpdatedCount);
+        }
+
+        [Test]
+        public void TryAdd_StackableOverflow_UsesSameReferenceInSeveralSlots()
+        {
+            var inventory = new Inventory<TestItem>(5);
+            var potion = TestItems.Stackable("potion", max: 10);
+
+            Assert.IsTrue(inventory.TryAdd(potion, 25));
+
+            Assert.AreEqual(3, inventory.FilledSlotCount);
+            Assert.AreEqual(25, inventory.GetQuantity("potion"));
+        }
+
         [Test]
         public void TryAdd_SameNonStackableInstanceTwice_SecondIsRejected()
         {

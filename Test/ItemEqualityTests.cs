@@ -7,7 +7,7 @@ namespace GI.UnityToolkit.Items.Test
         [Test]
         public void Equals_IsReferenceEquality_NotOverridden()
         {
-            var attributes = new FakeItemAttributes("disc", isStackable: true, maxStackSize: 10);
+            var attributes = new FakeItemAttributes("disc", maxStackSize: 10);
             var a = new TestItem(attributes);
             var b = new TestItem(attributes);
 
@@ -18,7 +18,7 @@ namespace GI.UnityToolkit.Items.Test
         [Test]
         public void GetHashCode_IsReferenceBased_TwoIdenticalItemsDiffer()
         {
-            var attributes = new FakeItemAttributes("disc", isStackable: true, maxStackSize: 10);
+            var attributes = new FakeItemAttributes("disc", maxStackSize: 10);
             var a = new TestItem(attributes);
             var b = new TestItem(attributes);
 
@@ -28,7 +28,7 @@ namespace GI.UnityToolkit.Items.Test
         [Test]
         public void TwoItemsFromSameAttributes_AreNotEqual_ButCanStackWith()
         {
-            var attributes = new FakeItemAttributes("disc", isStackable: true, maxStackSize: 10);
+            var attributes = new FakeItemAttributes("disc", maxStackSize: 10);
             var a = new TestItem(attributes);
             var b = new TestItem(attributes);
 

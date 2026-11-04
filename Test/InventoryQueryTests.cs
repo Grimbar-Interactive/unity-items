@@ -34,15 +34,22 @@ namespace GI.UnityToolkit.Items.Test
         }
 
         [Test]
-        public void Contains_ByInstance_TrueOnlyForThatReference()
+        public void ContainsInstance_TrueOnlyForThatInstanceId()
         {
             var inventory = new Inventory<TestItem>();
             var a = TestItems.NonStackable("disc");
             var b = TestItems.NonStackable("disc");
             inventory.TryAdd(a, 1);
 
-            Assert.IsTrue(inventory.Contains(a));
-            Assert.IsFalse(inventory.Contains(b));
+            Assert.IsTrue(inventory.ContainsInstance(a));
+            Assert.IsFalse(inventory.ContainsInstance(b));
+        }
+
+        [Test]
+        public void ContainsInstance_Null_IsFalse()
+        {
+            var inventory = new Inventory<TestItem>();
+            Assert.IsFalse(inventory.ContainsInstance(null));
         }
 
         [Test]
@@ -231,7 +238,7 @@ namespace GI.UnityToolkit.Items.Test
             var item = TestItems.NonStackable("disc");
             inventory.TryAdd(item, 1);
 
-            var result = inventory.TryFindByInstanceId(item.InstanceId, out var found);
+            var result = inventory.TryFindByInstanceId(item.InstanceId!.Value, out var found);
 
             Assert.IsTrue(result);
             Assert.AreSame(item, found);
@@ -251,24 +258,44 @@ namespace GI.UnityToolkit.Items.Test
             var item = TestItems.NonStackable("disc");
             inventory.TryAdd(item, 1);
 
-            Assert.AreEqual(0, inventory.IndexOfInstance(item.InstanceId));
+            Assert.AreEqual(0, inventory.IndexOfInstance(item.InstanceId!.Value));
         }
 
         [Test]
-        public void IndexOf_ByInstance_ReturnsSlotIndex()
+        public void IndexOfInstance_ByItem_ReturnsSlotIndex()
         {
             var inventory = new Inventory<TestItem>();
             var item = TestItems.NonStackable("disc");
             inventory.TryAdd(item, 1);
 
-            Assert.AreEqual(0, inventory.IndexOf(item));
+            Assert.AreEqual(0, inventory.IndexOfInstance(item));
         }
 
         [Test]
-        public void IndexOf_ByInstance_NotPresent_ReturnsMinusOne()
+        public void IndexOfInstance_ByItem_NotPresent_ReturnsMinusOne()
         {
             var inventory = new Inventory<TestItem>();
-            Assert.AreEqual(-1, inventory.IndexOf(TestItems.NonStackable("disc")));
+            Assert.AreEqual(-1, inventory.IndexOfInstance(TestItems.NonStackable("disc")));
+        }
+
+        [Test]
+        public void IndexOfInstance_ByItem_MatchesDistinctObjectWithSameInstanceId()
+        {
+            var inventory = new Inventory<TestItem>();
+            var attributes = new FakeItemAttributes("disc");
+            var id = Guid.NewGuid();
+            inventory.TryAdd(new TestItem(attributes, id));
+
+            Assert.AreEqual(0, inventory.IndexOfInstance(new TestItem(attributes, id)));
+        }
+
+        [Test]
+        public void IndexOfInstance_ByGuidEmpty_ReturnsMinusOne()
+        {
+            var inventory = new Inventory<TestItem>();
+            inventory.TryAdd(TestItems.NonStackable("disc"));
+
+            Assert.AreEqual(-1, inventory.IndexOfInstance(Guid.Empty));
         }
 
         [Test]

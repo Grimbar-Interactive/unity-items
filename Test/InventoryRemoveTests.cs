@@ -147,7 +147,7 @@ namespace GI.UnityToolkit.Items.Test
 
             inventory.TryRemoveInstance(a);
 
-            Assert.IsTrue(inventory.Contains(b));
+            Assert.IsTrue(inventory.ContainsInstance(b));
         }
 
         [Test]

@@ -65,12 +65,10 @@ namespace GI.UnityToolkit.Items.Test
             var inventory = new Inventory<TestItem>();
             var item = TestItems.Stackable(max: 10);
             var uniqueIdBefore = item.UniqueId;
-            var instanceIdBefore = item.InstanceId;
 
             inventory.TryAdd(item, 25);
 
             Assert.AreEqual(uniqueIdBefore, item.UniqueId);
-            Assert.AreEqual(instanceIdBefore, item.InstanceId);
         }
 
         [Test]
@@ -162,7 +160,7 @@ namespace GI.UnityToolkit.Items.Test
         public void TryAdd_RespectsCanStackWithOverride_DifferentStateGetsOwnSlot()
         {
             var inventory = new Inventory<DurabilityTestItem>();
-            var attributes = new FakeItemAttributes("disc", isStackable: true, maxStackSize: 10);
+            var attributes = new FakeItemAttributes("disc", maxStackSize: 10);
 
             inventory.TryAdd(new DurabilityTestItem(attributes, 40), 1);
             inventory.TryAdd(new DurabilityTestItem(attributes, 100), 1);

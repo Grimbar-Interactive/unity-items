@@ -30,13 +30,9 @@ namespace GI.UnityToolkit.Items
         Sprite Icon { get; }
 
         /// <summary>
-        /// Whether more than one unit of this kind may share a single inventory slot.
-        /// </summary>
-        bool IsStackable { get; }
-
-        /// <summary>
-        /// Maximum units of this kind in one slot. Ignored when <see cref="IsStackable"/> is false;
-        /// <see cref="Item.MaxStackSize"/> reports the effective value an inventory actually honors.
+        /// Maximum units of this kind in one slot. Values above 1 make the kind stackable; values
+        /// below 1 are treated as 1. <see cref="Item.MaxStackSize"/> reports the effective value an
+        /// inventory actually honors.
         /// </summary>
         int MaxStackSize { get; }
     }

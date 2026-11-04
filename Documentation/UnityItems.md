@@ -6,13 +6,22 @@ A slot-based item and inventory system. Everything lives in `GI.UnityToolkit.Ite
 
 | Type | Role |
 | --- | --- |
-| `IItemAttributes` | Read-only, edit-time description of a kind of item (`UniqueId`, `Name`, `Description`, `Icon`, `IsStackable`, `MaxStackSize`). |
+| `IItemAttributes` | Read-only, edit-time description of a kind of item (`UniqueId`, `Name`, `Description`, `Icon`, `MaxStackSize`). |
 | `ItemDefinition` | ScriptableObject base class implementing `IItemAttributes`. Subclass it for your game's item data. |
-| `Item` / `Item<T>` | Runtime instance built from attributes. Carries identity (`InstanceId`) and per-instance state, **not** quantity. |
+| `Item` / `Item<T>` | Runtime instance built from attributes. Carries per-instance state, **not** quantity. Non-stackable items also carry an identity (`InstanceId`). |
 | `ItemStack<TItem>` | One slot: an item plus a quantity. Only the inventory mutates it. |
 | `Inventory<TItem>` | The container. Owns quantity, stacking, events. |
 
 `UniqueId` says what *kind* an item is; `InstanceId` says which *object* it is. `Item` deliberately does not override `Equals`.
+
+**Stackable** means `MaxStackSize > 1` (`Item.IsStackable`, derived and not overridable). The two kinds of item are compared differently:
+
+| | Compared by | `InstanceId` |
+| --- | --- | --- |
+| Stackable | `UniqueId` (and `CanStackWith`) - units are fungible | `null` |
+| Non-stackable | `InstanceId` - at most one slot per id | a `Guid` |
+
+Stackables carry no identity because stacking merges units without keeping the incoming item, and one stackable reference may legitimately fill several slots (overflow, `SplitStack`, partial transfers). `IndexOfInstance`, `ContainsInstance`, `TryRemoveInstance` and `TryFindByInstanceId` therefore never match a stackable; use the `UniqueId` overloads (`Contains(string)`, `TryRemove`, `GetQuantity`) for those.
 
 ## Two inventory modes
 
@@ -35,7 +44,7 @@ var unique = new Inventory<MyItem>(20, allowDuplicates: false); // at most one s
 | `AddRange` | Adds one unit of each item, best effort, as a single batch. Reports what did not fit. |
 | `CanAdd` / `CanRemove` / `GetFreeSpaceFor` | Ask first. `IsFull` only says no *slot* is free; a full inventory can still accept units that stack. `CanRemove` takes an item or a `UniqueId`. |
 
-A non-stackable item (`MaxStackSize == 1`) can only be added one unit at a time per instance; use `AddRange` with distinct instances. One non-stackable *instance* can occupy only one slot, so adding an instance that is already held is rejected.
+A non-stackable item (`MaxStackSize == 1`) can only be added one unit at a time per instance; use `AddRange` with distinct instances. One `InstanceId` can occupy only one slot, so adding a non-stackable item whose `InstanceId` is already held is rejected, even if it is a different object (for example a save restored twice).
 
 ## Organising slots
 
@@ -101,8 +110,8 @@ public class DiscBag : Inventory<MyItem>
 
 `Inventory` and `ItemStack` are intentionally **not** Unity-serializable. Persist through your own DTO:
 
-- Save one record per occupied slot: slot index, `UniqueId`, quantity, and (for non-stackable items with per-instance state) `InstanceId`.
-- Restore by looking up the `ItemDefinition` from the saved `UniqueId` and constructing the item. Use the `Item(attributes, instanceId)` constructor to bring back a saved `InstanceId`.
+- Save one record per occupied slot: slot index, `UniqueId`, quantity, and `InstanceId` (null for stackable items, which have none).
+- Restore by looking up the `ItemDefinition` from the saved `UniqueId` and constructing the item. Use the `Item(attributes, instanceId)` constructor to bring back a saved `InstanceId` for non-stackable items.
 - **Fixed-size inventories:** call `TryAddAt(slotIndex, item, quantity)` for each record. Items return to exactly their saved slots, and a failed call (bad data, a definition that changed) leaves the slot untouched and returns false.
 - **Unbounded inventories:** there are no empty slots to address, so call `TryAdd` for each record in saved order. Slot order is rebuilt exactly.
 
@@ -110,14 +119,15 @@ public class DiscBag : Inventory<MyItem>
 var restored = new Inventory<MyItem>(save.SlotCount);
 foreach (var entry in save.Slots)
 {
-    var item = new MyItem(definitions[entry.UniqueId], entry.InstanceId);
+    var definition = definitions[entry.UniqueId];
+    var item = entry.InstanceId is { } id ? new MyItem(definition, id) : new MyItem(definition);
     if (!restored.TryAddAt(entry.Index, item, entry.Quantity)) Debug.LogWarning($"Could not restore {entry.UniqueId}");
 }
 ```
 
 ## Authoring definitions
 
-`ItemDefinition` needs a non-empty, unique, never-changing `UniqueId`. `MaxStackSize` defaults to 1 and is clamped to at least 1; it is ignored unless `IsStackable` is set. In the editor, a missing `UniqueId` logs a warning when the asset is validated.
+`ItemDefinition` needs a non-empty, unique, never-changing `UniqueId`. `MaxStackSize` defaults to 1 and is clamped to at least 1; a value above 1 is what makes the kind stackable. In the editor, a missing `UniqueId` logs a warning when the asset is validated.
 
 Two definitions sharing a `UniqueId` are treated as one kind everywhere: they stack together and collide in saves. The editor assembly (`GrimbarInteractive.UnityToolkit.Items.Editor`) checks for this automatically after any `ItemDefinition` asset is created, duplicated, saved or moved, and warns once per duplicated id listing every asset involved (click the warning to ping the first). Run it on demand from **Grimbar Interactive > Items > Validate Unique Ids**, or call `ItemDefinitionValidator.FindDuplicateUniqueIds` from your own tooling or tests.
 

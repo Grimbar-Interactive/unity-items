@@ -232,15 +232,17 @@ namespace GI.UnityToolkit.Items
         /// <see cref="int.MaxValue"/> when unbounded and accepted, and 0 for a null or rejected item.
         /// </summary>
         /// <remarks><see cref="TryAdd(TItem,int)"/> succeeds if and only if its quantity is positive
-        /// and at most this value (plus the non-stackable rule described there).</remarks>
+        /// and at most this value (plus the non-stackable rule described there). Stackable items are
+        /// matched by <see cref="IItemAttributes.UniqueId"/>; non-stackable items by
+        /// <see cref="Item.InstanceId"/>.</remarks>
         public int GetFreeSpaceFor(TItem item)
         {
             if (item == null || !CanAcceptItem(item)) return 0;
 
-            // A non-stackable instance may occupy only one slot: a second slot holding the same
-            // reference would share one InstanceId, and lookup/removal/save by instance would only
-            // ever see the first.
-            if (item.MaxStackSize <= 1 && IndexOf(item) >= 0) return 0;
+            // A non-stackable item is identified by its InstanceId, which may occupy only one slot:
+            // a second slot holding the same id (even via a distinct object) would make
+            // lookup/removal/save by instance only ever see the first.
+            if (!item.IsStackable && IndexOfInstance(item) >= 0) return 0;
 
             long existingSpace = 0;
             var hasExistingStackOfKind = false;
@@ -274,7 +276,7 @@ namespace GI.UnityToolkit.Items
         public bool CanAdd(TItem item, int quantity = 1)
         {
             if (item == null || quantity <= 0) return false;
-            if (item.MaxStackSize <= 1 && quantity > 1) return false;
+            if (!item.IsStackable && quantity > 1) return false;
             return quantity <= GetFreeSpaceFor(item);
         }
 
@@ -286,15 +288,18 @@ namespace GI.UnityToolkit.Items
         /// Fills partial stacks of matching items in ascending slot order first, then consumes empty
         /// slots. Atomic: if the full quantity does not fit, no slot is touched and no event fires.
         /// <para>
-        /// A non-stackable item (<see cref="Item.MaxStackSize"/> of 1) is rejected when
+        /// A non-stackable item (<see cref="Item.IsStackable"/> false) is rejected when
         /// <paramref name="quantity"/> exceeds 1, because each such slot needs its own instance and
         /// this method has only one to give. Use <see cref="AddRange"/> with distinct instances.
-        /// For the same reason, a non-stackable instance that is already held is rejected: one
-        /// object reference may occupy at most one slot.
+        /// For the same reason, a non-stackable item whose <see cref="Item.InstanceId"/> is already
+        /// held is rejected, whether or not it is the same object: one id may occupy at most one
+        /// slot.
         /// </para>
         /// </remarks>
         public bool TryAdd(TItem item, int quantity = 1) => TryAdd(item, quantity, out _);
 
+        /// <param name="item">The item to add.</param>
+        /// <param name="quantity">Number of units to add; must be positive.</param>
         /// <param name="remainder">0 on success; the full requested quantity on failure.</param>
         /// <inheritdoc cref="TryAdd(TItem,int)"/>
         public bool TryAdd(TItem item, int quantity, out int remainder)
@@ -320,9 +325,9 @@ namespace GI.UnityToolkit.Items
         {
             if (item == null || quantity <= 0 || !CanAcceptItem(item)) return 0;
 
-            var effectiveQuantity = item.MaxStackSize <= 1 ? Math.Min(quantity, 1) : quantity;
+            var effectiveQuantity = !item.IsStackable ? Math.Min(quantity, 1) : quantity;
             var available = GetFreeSpaceFor(item);
-            var toAdd = (int)Math.Min((long)effectiveQuantity, (long)available);
+            var toAdd = (int)Math.Min((long)effectiveQuantity, available);
             if (toAdd <= 0) return 0;
 
             using (OpenBatch())
@@ -337,6 +342,7 @@ namespace GI.UnityToolkit.Items
         /// Adds one unit of each item in <paramref name="items"/>, best effort, in sequence order, as
         /// a single batch. Null entries are skipped and reported in <paramref name="notAdded"/>.
         /// </summary>
+        /// <param name="items">The items to add, one unit each.</param>
         /// <param name="notAdded">Items that did not fit. Empty when every item was added.</param>
         /// <returns>Number of items added.</returns>
         /// <exception cref="ArgumentNullException"><paramref name="items"/> is null.</exception>
@@ -387,11 +393,13 @@ namespace GI.UnityToolkit.Items
         /// <summary>
         /// Removes exactly <paramref name="quantity"/> units matching <paramref name="item"/>'s
         /// <see cref="IItemAttributes.UniqueId"/>, or nothing. Draining proceeds in ascending slot
-        /// order. Matches by kind, not by reference - use <see cref="TryRemoveInstance"/> for that.
+        /// order. Matches by kind, not by instance - use <see cref="TryRemoveInstance"/> for that.
         /// </summary>
         /// <returns>True when the full quantity was removed.</returns>
         public bool TryRemove(TItem item, int quantity = 1) => TryRemove(item, quantity, out _);
 
+        /// <param name="item">An item of the kind to remove; matched by <see cref="IItemAttributes.UniqueId"/>.</param>
+        /// <param name="quantity">Number of units to remove; must be positive.</param>
         /// <param name="remainder">0 on success; the full requested quantity on failure.</param>
         /// <inheritdoc cref="TryRemove(TItem,int)"/>
         public bool TryRemove(TItem item, int quantity, out int remainder)
@@ -407,6 +415,9 @@ namespace GI.UnityToolkit.Items
         /// </summary>
         public bool TryRemove(string uniqueId, int quantity = 1) => TryRemove(uniqueId, quantity, out _);
 
+        /// <param name="uniqueId">The <see cref="IItemAttributes.UniqueId"/> of the kind to remove.</param>
+        /// <param name="quantity">Number of units to remove; must be positive.</param>
+        /// <param name="remainder">0 on success; the full requested quantity on failure.</param>
         /// <inheritdoc cref="TryRemove(TItem,int,out int)"/>
         public bool TryRemove(string uniqueId, int quantity, out int remainder)
         {
@@ -446,13 +457,14 @@ namespace GI.UnityToolkit.Items
         }
 
         /// <summary>
-        /// Removes the entire stack holding this exact object reference. Does nothing if the
-        /// instance is not held.
+        /// Removes the stack holding the item with this <paramref name="item"/>'s
+        /// <see cref="Item.InstanceId"/>. Does nothing if that instance is not held, and always
+        /// returns false for a stackable item, which has no instance identity - use
+        /// <see cref="TryRemove(TItem,int)"/> to remove it by kind.
         /// </summary>
         public bool TryRemoveInstance(TItem item)
         {
-            if (item == null) return false;
-            var index = IndexOf(item);
+            var index = IndexOfInstance(item);
             if (index < 0) return false;
 
             using (OpenBatch())
@@ -480,6 +492,7 @@ namespace GI.UnityToolkit.Items
         /// <summary>
         /// Removes the entire stack at <paramref name="index"/>.
         /// </summary>
+        /// <param name="index">Index of the slot to empty.</param>
         /// <param name="item">The item removed, or null when the slot was empty.</param>
         /// <param name="quantity">Units removed, or 0 when the slot was empty.</param>
         /// <returns>False when the slot was already empty.</returns>
@@ -550,7 +563,7 @@ namespace GI.UnityToolkit.Items
         /// <list type="bullet">
         /// <item>the slot is empty and the quantity exceeds <see cref="Item.MaxStackSize"/>, the
         /// kind is already held while <see cref="AllowDuplicates"/> is false, or a non-stackable
-        /// instance is already held;</item>
+        /// item with the same <see cref="Item.InstanceId"/> is already held;</item>
         /// <item>the slot is occupied and the item cannot stack with it, or the stack lacks room
         /// for the full quantity.</item>
         /// </list>
@@ -572,7 +585,7 @@ namespace GI.UnityToolkit.Items
             if (slot.IsEmpty)
             {
                 if (quantity > item.MaxStackSize) return false;
-                if (item.MaxStackSize <= 1 && IndexOf(item) >= 0) return false;
+                if (!item.IsStackable && IndexOfInstance(item) >= 0) return false;
                 if (!AllowDuplicates && IndexOf(item.UniqueId) >= 0) return false;
 
                 using (OpenBatch())
@@ -664,13 +677,14 @@ namespace GI.UnityToolkit.Items
 
             var item = slot.Item;
             var wanted = Math.Min(quantity, slot.Quantity);
-            var toMove = (int)Math.Min((long)wanted, (long)target.GetFreeSpaceFor(item));
+            var toMove = (int)Math.Min((long)wanted, target.GetFreeSpaceFor(item));
             if (toMove <= 0) return 0;
 
             ApplyTransfer(target, index, item, toMove);
             return toMove;
         }
 
+        // ReSharper disable once ParameterOnlyUsedForPreconditionCheck.Local
         private void ValidateTransfer(Inventory<TItem> target, int index)
         {
             if (target == null) throw new ArgumentNullException(nameof(target));
@@ -777,9 +791,11 @@ namespace GI.UnityToolkit.Items
         }
 
         /// <summary>
-        /// Whether this exact object reference occupies a slot.
+        /// Whether an item with this item's <see cref="Item.InstanceId"/> occupies a slot. Always
+        /// false for a stackable item, which has no instance identity; use
+        /// <see cref="Contains(string)"/> to ask about its kind.
         /// </summary>
-        public bool Contains(TItem item) => item != null && IndexOf(item) >= 0;
+        public bool ContainsInstance(TItem item) => IndexOfInstance(item) >= 0;
 
         /// <summary>
         /// Whether any slot holds an item with this <see cref="IItemAttributes.UniqueId"/>.
@@ -899,14 +915,15 @@ namespace GI.UnityToolkit.Items
         }
 
         /// <summary>
-        /// Finds the held item with this <see cref="Item.InstanceId"/>.
+        /// Finds the held non-stackable item with this <see cref="Item.InstanceId"/>. Stackable
+        /// items have no instance id and are never found.
         /// </summary>
         public bool TryFindByInstanceId(Guid instanceId, out TItem item)
         {
-            foreach (var candidate in Items)
+            var index = IndexOfInstance(instanceId);
+            if (index >= 0)
             {
-                if (candidate.InstanceId != instanceId) continue;
-                item = candidate;
+                item = _slots[index].Item;
                 return true;
             }
 
@@ -915,19 +932,14 @@ namespace GI.UnityToolkit.Items
         }
 
         /// <summary>
-        /// Slot index of this exact object reference, or -1.
+        /// Slot index of the held item sharing this item's <see cref="Item.InstanceId"/>, or -1.
+        /// Always -1 for a null or stackable item, which has no instance identity.
         /// </summary>
-        public int IndexOf(TItem item)
+        public int IndexOfInstance(TItem item)
         {
             if (item == null) return -1;
-
-            for (var i = 0; i < _slots.Count; i++)
-            {
-                var slot = _slots[i];
-                if (!slot.IsEmpty && ReferenceEquals(slot.Item, item)) return i;
-            }
-
-            return -1;
+            var instanceId = item.InstanceId;
+            return instanceId.HasValue ? IndexOfInstance(instanceId.Value) : -1;
         }
 
         /// <summary>
@@ -947,10 +959,13 @@ namespace GI.UnityToolkit.Items
         }
 
         /// <summary>
-        /// Slot index of the item with this <see cref="Item.InstanceId"/>, or -1.
+        /// Slot index of the item with this <see cref="Item.InstanceId"/>, or -1. Stackable items
+        /// have no instance id and never match.
         /// </summary>
         public int IndexOfInstance(Guid instanceId)
         {
+            if (instanceId == Guid.Empty) return -1;
+
             for (var i = 0; i < _slots.Count; i++)
             {
                 var slot = _slots[i];
@@ -1234,7 +1249,7 @@ namespace GI.UnityToolkit.Items
         public void Sort(IComparer<TItem> comparer)
         {
             if (comparer == null) throw new ArgumentNullException(nameof(comparer));
-            Sort((a, b) => comparer.Compare(a, b));
+            Sort(comparer.Compare);
         }
 
         /// <inheritdoc cref="Sort(IComparer{TItem})"/>

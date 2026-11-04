@@ -101,7 +101,7 @@ namespace GI.UnityToolkit.Items.Test
         public void Contains_NullItem_ReturnsFalse()
         {
             var inventory = new Inventory<TestItem>();
-            Assert.IsFalse(inventory.Contains((TestItem)null));
+            Assert.IsFalse(inventory.ContainsInstance(null));
         }
 
         [Test]
