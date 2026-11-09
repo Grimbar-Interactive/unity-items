@@ -7,6 +7,7 @@ Item and inventory management system for Unity.
 - Transfer between inventories (`TryTransferTo` / `TransferUpTo`) and slot-exact placement for save restore (`TryAddAt`)
 - Batched, ordered events for UI binding
 - ScriptableObject-backed `ItemDefinition`, with no dependency on project code
+- Items are non-stackable by default; derive from `StackableItemDefinition` to make a kind stack (a `MaxStackSize` of 1 keeps it non-stackable)
 - Editor warning when two definitions share a `UniqueId`
 
 See [Documentation/UnityItems.md](Documentation/UnityItems.md) for the full guide.

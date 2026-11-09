@@ -7,7 +7,8 @@ A slot-based item and inventory system. Everything lives in `GI.UnityToolkit.Ite
 | Type | Role |
 | --- | --- |
 | `IItemAttributes` | Read-only, edit-time description of a kind of item (`UniqueId`, `Name`, `Description`, `Icon`, `MaxStackSize`). |
-| `ItemDefinition` | ScriptableObject base class implementing `IItemAttributes`. Subclass it for your game's item data. |
+| `ItemDefinition` | ScriptableObject base class implementing `IItemAttributes`. Subclass it for your game's item data. Items built from it never stack. |
+| `StackableItemDefinition` | `ItemDefinition` with a serialized `MaxStackSize` (default 64, minimum 1). Subclass it for items that stack; a value of 1 opts an item out of stacking. |
 | `Item` / `Item<T>` | Runtime instance built from attributes. Carries per-instance state, **not** quantity. Non-stackable items also carry an identity (`InstanceId`). |
 | `ItemStack<TItem>` | One slot: an item plus a quantity. Only the inventory mutates it. |
 | `Inventory<TItem>` | The container. Owns quantity, stacking, events. |
@@ -127,7 +128,7 @@ foreach (var entry in save.Slots)
 
 ## Authoring definitions
 
-`ItemDefinition` needs a non-empty, unique, never-changing `UniqueId`. `MaxStackSize` defaults to 1 and is clamped to at least 1; a value above 1 is what makes the kind stackable. In the editor, a missing `UniqueId` logs a warning when the asset is validated.
+`ItemDefinition` needs a non-empty, unique, never-changing `UniqueId`. A plain `ItemDefinition` always has a `MaxStackSize` of 1, so its items are not stackable. To make a kind stackable, derive from `StackableItemDefinition` instead: it serializes `MaxStackSize` (default 64, kept at 1 or above in the editor), and a value above 1 is what makes the kind stackable; a value of 1 lets an inheritor opt out of stacking. `ItemDefinition.IsStackable` reports this for editor and UI code that has no `Item` yet. In the editor, a missing `UniqueId` logs a warning when the asset is validated.
 
 Two definitions sharing a `UniqueId` are treated as one kind everywhere: they stack together and collide in saves. The editor assembly (`GrimbarInteractive.UnityToolkit.Items.Editor`) checks for this automatically after any `ItemDefinition` asset is created, duplicated, saved or moved, and warns once per duplicated id listing every asset involved (click the warning to ping the first). Run it on demand from **Grimbar Interactive > Items > Validate Unique Ids**, or call `ItemDefinitionValidator.FindDuplicateUniqueIds` from your own tooling or tests.
 

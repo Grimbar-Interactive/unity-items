@@ -3,6 +3,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [1.2.2] - 2026-11-09
+### Added
+- `StackableItemDefinition`: an `ItemDefinition` with a serialized `MaxStackSize` that defaults to 64 and is kept at 1 or above (in the inspector and in `OnValidate`). A value of 1 makes the item non-stackable, so inheritors can opt out of stacking.
+- `ItemDefinition.IsStackable`: `MaxStackSize > 1`, for editor and UI code that has no constructed `Item`. It is not part of `IItemAttributes`.
+- Edit-mode tests for item definitions.
+
+### Changed
+- `ItemDefinition` is no longer stackable: its `MaxStackSize` is fixed at 1 and no longer serialized. Derive from `StackableItemDefinition` for items that stack.
+
 ## [1.2.1] - 2026-11-04
 ### Fixed
 - A `LinkedInventory` could be left claiming units its source no longer held when an event handler on the source threw: the source's `OnInventoryUpdated` never fired, so the loadout never reconciled. The loadout now follows the source through an internal notification that is raised after the public events even if a handler throws. As a result it reconciles after all public source handlers, not in subscription order. A loadout whose own handler throws no longer stops other loadouts on the same source from reconciling: every loadout is notified, then the first exception is rethrown.

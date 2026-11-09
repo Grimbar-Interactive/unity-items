@@ -4,6 +4,7 @@
     "references": [
         "GrimbarInteractive.UnityToolkit.Items",
         "GrimbarInteractive.UnityToolkit.Items.Editor",
+        "GrimbarInteractive.UnityToolkit.Variables",
         "UnityEngine.TestRunner",
         "UnityEditor.TestRunner"
     ],

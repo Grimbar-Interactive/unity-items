@@ -21,7 +21,19 @@ namespace GI.UnityToolkit.Items
         [field: SerializeField] public Sprite Icon { get; private set; }
 
         /// <inheritdoc cref="IItemAttributes.MaxStackSize"/>
-        [field: SerializeField, Min(1)] public virtual int MaxStackSize { get; private set; } = 1;
+        /// <remarks>
+        /// Always 1 here, so a plain definition is not stackable. Derive from
+        /// <see cref="StackableItemDefinition"/> to make items stack.
+        /// </remarks>
+        public virtual int MaxStackSize => 1;
+
+        /// <summary>
+        /// Whether items built from this definition will stack: <see cref="MaxStackSize"/> above 1.
+        /// A convenience for editor and UI code that has no constructed <see cref="Item"/>; it is
+        /// deliberately not part of <see cref="IItemAttributes"/>, and <see cref="Item.IsStackable"/>
+        /// remains the authority for a live item.
+        /// </summary>
+        public bool IsStackable => MaxStackSize > 1;
 
         /// <summary>
         /// Editor-only validation: trims <see cref="UniqueId"/> and warns when it is missing, since
@@ -41,8 +53,6 @@ namespace GI.UnityToolkit.Items
             {
                 Debug.LogWarning($"{GetType().Name} '{name}' has no UniqueId. Items need one to stack and be looked up.", this);
             }
-
-            if (MaxStackSize < 1) MaxStackSize = 1;
 #endif
         }
     }
