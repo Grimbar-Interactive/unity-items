@@ -3,6 +3,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [1.3.0] - 2026-11-10
+### Added
+- `InventoryCollection`: holds one `Inventory<T>` per item type (an item type and its base types may each have one, for example `Inventory<UseItem>` and `Inventory<BasicItem>`) and routes `TryAdd` / `AddUpTo` / `AddRange` to the most specific registered inventory for the item's runtime type. Registration (`Register`, `TryRegister`, `Unregister`, `GetInventory`), removal by item, kind or instance, and queries (`Contains`, `GetQuantity`, `TryFind`, `FindAll`, `TryFindByInstanceId`, with typed `TryFind<T>` / `FindAll<T>`) work across every inventory.
+- `InventoryCollection(allowFallback)`: when true, units the most specific inventory cannot take (full, or rejected by its `CanAcceptItem` filter) spill into less specific inventories. Defaults to false, where such an add fails.
+- `InventoryCollection` forwards `OnItemAdded` / `OnItemRemoved` from its inventories and raises `OnCollectionUpdated` once per operation; `BeginBatchUpdate` coalesces them.
+- Edit-mode tests for `InventoryCollection`.
+
 ## [1.2.2] - 2026-11-09
 ### Added
 - `StackableItemDefinition`: an `ItemDefinition` with a serialized `MaxStackSize` that defaults to 64 and is kept at 1 or above (in the inspector and in `OnValidate`). A value of 1 makes the item non-stackable, so inheritors can opt out of stacking.

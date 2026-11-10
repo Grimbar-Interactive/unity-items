@@ -69,6 +69,33 @@ Enumerating an inventory (`foreach`, `Items`, `FindAll`) throws `InvalidOperatio
 foreach (var item in inventory.FindAll(IsExpired).ToList()) inventory.TryRemoveInstance(item);
 ```
 
+## Inventory collections
+
+An `InventoryCollection` holds several typed inventories and routes items to the right one. At most one `Inventory<T>` may be registered per item type, but a type and its base types may each have one:
+
+```csharp
+var collection = new InventoryCollection();
+collection.Register(new Inventory<BasicItem>());
+collection.Register(new Inventory<UseItem>(maxSlotCount: 10));   // UseItem : BasicItem
+
+collection.TryAdd(potion);   // a UseItem: goes to Inventory<UseItem>
+collection.TryAdd(rock);     // a BasicItem: goes to Inventory<BasicItem>
+```
+
+An item is added to the **most specific** registered inventory for its runtime type, regardless of registration order. An item with no matching inventory is rejected. Registration is by exact type, so a subclass such as `DiscBag : Inventory<DiscItem>` is registered as `Register(discBag)` and keyed `DiscItem`.
+
+By default the add uses only that one inventory: if it is full, or its `CanAcceptItem` rejects the item, the add fails. Pass `allowFallback: true` to let units spill into less specific inventories (`UseItem` then `BasicItem`):
+
+```csharp
+var collection = new InventoryCollection(allowFallback: true);
+```
+
+`TryAdd` stays all-or-nothing across every inventory it may use; `AddUpTo` and `AddRange` are best-effort. A non-stackable item whose `InstanceId` is already held by any inventory it could be added to is rejected, so one instance never lives in two inventories.
+
+Removal (`TryRemove`, `RemoveUpTo`, `TryRemoveInstance`) and queries (`Contains`, `GetQuantity`, `TryFind`, `FindAll`, `TryFindByInstanceId`, `Items`) look at the whole chain, most specific first, whatever `allowFallback` says. The `string uniqueId` overloads search every inventory in registration order. `TryFind<T>` and `FindAll<T>` filter to items of type `T`.
+
+The collection forwards `OnItemAdded` and `OnItemRemoved` from its inventories and raises `OnCollectionUpdated` once at the end of each operation (also on register and unregister). `BeginBatchUpdate()` batches every registered inventory and coalesces the update. Unregistering an inventory stops the forwarding but leaves its contents alone.
+
 ## Events
 
 | Event | Raised |
