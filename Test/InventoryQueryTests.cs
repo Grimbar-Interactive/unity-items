@@ -282,11 +282,11 @@ namespace GI.UnityToolkit.Items.Test
         public void IndexOfInstance_ByItem_MatchesDistinctObjectWithSameInstanceId()
         {
             var inventory = new Inventory<TestItem>();
-            var attributes = new FakeItemAttributes("disc");
+            var definition = FakeItemDefinition.Create("disc");
             var id = Guid.NewGuid();
-            inventory.TryAdd(new TestItem(attributes, id));
+            inventory.TryAdd(new TestItem(definition, id));
 
-            Assert.AreEqual(0, inventory.IndexOfInstance(new TestItem(attributes, id)));
+            Assert.AreEqual(0, inventory.IndexOfInstance(new TestItem(definition, id)));
         }
 
         [Test]

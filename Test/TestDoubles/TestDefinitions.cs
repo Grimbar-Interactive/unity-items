@@ -3,9 +3,11 @@ using UnityEngine;
 
 namespace GI.UnityToolkit.Items.Test
 {
-    internal sealed class PlainTestDefinition : ItemDefinition
+    internal sealed class PlainTestDefinition : ItemDefinition<DefinitionTestItem>
     {
         public void RunOnValidate() => OnValidate();
+
+        protected override DefinitionTestItem Construct() => new DefinitionTestItem(this);
     }
 
     internal sealed class StackableTestDefinition : StackableItemDefinition
@@ -17,6 +19,8 @@ namespace GI.UnityToolkit.Items.Test
         /// </summary>
         public void SetMaxStackSize(int value) =>
             JsonUtility.FromJsonOverwrite($"{{\"maxStackSize\":{value}}}", this);
+
+        protected override Item CreateItemUntyped() => new DefinitionTestItem(this);
     }
 
     internal sealed class DefinitionTestItem : Item<ItemDefinition>

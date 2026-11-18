@@ -6,7 +6,7 @@ Item and inventory management system for Unity.
 - Atomic `Try*` operations, best-effort `*UpTo` / `AddRange`
 - Transfer between inventories (`TryTransferTo` / `TransferUpTo`) and slot-exact placement for save restore (`TryAddAt`)
 - Batched, ordered events for UI binding
-- ScriptableObject-backed `ItemDefinition`, with no dependency on project code
+- ScriptableObject-backed `ItemDefinition`, with no dependency on project code; `ItemDefinition<TItem>` builds typed items via `CreateItem()`
 - Items are non-stackable by default; derive from `StackableItemDefinition` to make a kind stack (a `MaxStackSize` of 1 keeps it non-stackable)
 - Editor warning when two definitions share a `UniqueId`
 
@@ -17,5 +17,5 @@ See [Documentation/UnityItems.md](Documentation/UnityItems.md) for the full guid
 var inventory = new Inventory<MyItem>(maxSlotCount: 20);
 inventory.OnSlotChanged += index => RefreshSlot(index);
 
-if (inventory.TryAdd(new MyItem(definition), 1)) { /* added */ }
+if (inventory.TryAdd(definition.CreateItem(), 1)) { /* added */ }   // definition : ItemDefinition<MyItem>
 ```

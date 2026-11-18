@@ -3,8 +3,9 @@ using UnityEngine;
 namespace GI.UnityToolkit.Items
 {
     /// <summary>
-    /// The read-only, edit-time description of a kind of item. Implemented by ScriptableObject
-    /// definitions in game code and by lightweight plain classes in tests.
+    /// The read-only, edit-time description of a kind of item. Implemented by
+    /// <see cref="ItemDefinition"/>. An <see cref="Item"/> is built from an <see cref="ItemDefinition"/>,
+    /// not from this interface directly.
     /// </summary>
     public interface IItemAttributes
     {

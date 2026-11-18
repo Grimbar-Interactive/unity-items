@@ -252,7 +252,7 @@ namespace GI.UnityToolkit.Items.Test
         {
             var source = new Inventory<TestItem>();
             var sword = AddSword(source);
-            var lookalike = new TestItem(new FakeItemAttributes("sword"), sword.InstanceId.Value);
+            var lookalike = new TestItem(FakeItemDefinition.Create("sword"), sword.InstanceId.Value);
             var linked = new LinkedInventory<TestItem>(source);
 
             Assert.IsTrue(linked.TryAdd(lookalike));

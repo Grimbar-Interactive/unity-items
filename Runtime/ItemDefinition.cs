@@ -36,6 +36,19 @@ namespace GI.UnityToolkit.Items
         public bool IsStackable => MaxStackSize > 1;
 
         /// <summary>
+        /// Builds a new <see cref="Item"/> from this definition. Each call returns a new instance.
+        /// Derive from <see cref="ItemDefinition{TItem}"/> to get a typed overload.
+        /// </summary>
+        public Item CreateItem() => CreateItemUntyped();
+
+        /// <summary>
+        /// Builds the item for <see cref="CreateItem"/>. <see cref="ItemDefinition{TItem}"/> implements
+        /// this for you; other definitions, such as <see cref="StackableItemDefinition"/> subclasses,
+        /// implement it directly.
+        /// </summary>
+        protected abstract Item CreateItemUntyped();
+
+        /// <summary>
         /// Editor-only validation: trims <see cref="UniqueId"/> and warns when it is missing, since
         /// an empty id breaks stacking and lookup. Override and call the base when extending.
         /// </summary>
@@ -55,5 +68,24 @@ namespace GI.UnityToolkit.Items
             }
 #endif
         }
+    }
+
+    /// <summary>
+    /// An <see cref="ItemDefinition"/> that builds a specific <see cref="Item"/> type.
+    /// </summary>
+    /// <typeparam name="TItem">The item type built from this definition.</typeparam>
+    public abstract class ItemDefinition<TItem> : ItemDefinition where TItem : Item
+    {
+        /// <summary>
+        /// Builds a new <typeparamref name="TItem"/> from this definition by calling <see cref="Construct"/>.
+        /// </summary>
+        public new TItem CreateItem() => Construct();
+
+        protected sealed override Item CreateItemUntyped() => CreateItem();
+
+        /// <summary>
+        /// Constructs a new item, normally <c>new TItem(this)</c>.
+        /// </summary>
+        protected abstract TItem Construct();
     }
 }

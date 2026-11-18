@@ -3,6 +3,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [1.4.0] - 2026-11-18
+### Added
+- `ItemDefinition.CreateItem()` and the `ItemDefinition<TItem>` base class: implement `Construct()` and the definition builds typed `Item` instances. Other definitions (for example `StackableItemDefinition` subclasses) implement `CreateItemUntyped()`.
+- Test double `FakeItemDefinition`, which creates and cleans up `ItemDefinition` assets for edit-mode tests, and tests for `CreateItem()`.
+
+### Changed
+- `ItemDefinition` can now be extended generically and have methods for creating `Item` instances.
+- `Item` is now constructed with a hard `ItemDefinition` type instead of `IItemAttributes`. `Item.Definition` is an `ItemDefinition`, and `Item<TDef>` is constrained to `TDef : ItemDefinition`.
+- Edit-mode tests build items from `ItemDefinition` ScriptableObjects instead of plain `IItemAttributes` classes.
+
+### Migration
+- Change item constructors from `IItemAttributes` to `ItemDefinition` (and `Item<TDef>` type arguments to a definition type). Plain `IItemAttributes` classes can no longer back an `Item`; they remain valid for `ItemDefinitionValidator.FindDuplicateUniqueIds`.
+
 ## [1.3.0] - 2026-11-10
 ### Added
 - `InventoryCollection`: holds one `Inventory<T>` per item type (an item type and its base types may each have one, for example `Inventory<UseItem>` and `Inventory<BasicItem>`) and routes `TryAdd` / `AddUpTo` / `AddRange` to the most specific registered inventory for the item's runtime type. Registration (`Register`, `TryRegister`, `Unregister`, `GetInventory`), removal by item, kind or instance, and queries (`Contains`, `GetQuantity`, `TryFind`, `FindAll`, `TryFindByInstanceId`, with typed `TryFind<T>` / `FindAll<T>`) work across every inventory.

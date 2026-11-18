@@ -6,12 +6,12 @@ namespace GI.UnityToolkit.Items.Test
     {
         public static TestItem Stackable(string id = "stackable", int max = 10)
         {
-            return new TestItem(new FakeItemAttributes(id, maxStackSize: max));
+            return new TestItem(FakeItemDefinition.Create(id, maxStackSize: max));
         }
 
         public static TestItem NonStackable(string id = "unique")
         {
-            return new TestItem(new FakeItemAttributes(id));
+            return new TestItem(FakeItemDefinition.Create(id));
         }
 
         public static List<TestItem> Many(int count, string id = "unique")

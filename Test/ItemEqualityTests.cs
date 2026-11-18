@@ -7,9 +7,9 @@ namespace GI.UnityToolkit.Items.Test
         [Test]
         public void Equals_IsReferenceEquality_NotOverridden()
         {
-            var attributes = new FakeItemAttributes("disc", maxStackSize: 10);
-            var a = new TestItem(attributes);
-            var b = new TestItem(attributes);
+            var definition = FakeItemDefinition.Create("disc", maxStackSize: 10);
+            var a = new TestItem(definition);
+            var b = new TestItem(definition);
 
             Assert.IsTrue(a.Equals(a));
             Assert.IsFalse(a.Equals(b));
@@ -18,9 +18,9 @@ namespace GI.UnityToolkit.Items.Test
         [Test]
         public void GetHashCode_IsReferenceBased_TwoIdenticalItemsDiffer()
         {
-            var attributes = new FakeItemAttributes("disc", maxStackSize: 10);
-            var a = new TestItem(attributes);
-            var b = new TestItem(attributes);
+            var definition = FakeItemDefinition.Create("disc", maxStackSize: 10);
+            var a = new TestItem(definition);
+            var b = new TestItem(definition);
 
             Assert.AreNotEqual(a.GetHashCode(), b.GetHashCode());
         }
@@ -28,9 +28,9 @@ namespace GI.UnityToolkit.Items.Test
         [Test]
         public void TwoItemsFromSameAttributes_AreNotEqual_ButCanStackWith()
         {
-            var attributes = new FakeItemAttributes("disc", maxStackSize: 10);
-            var a = new TestItem(attributes);
-            var b = new TestItem(attributes);
+            var definition = FakeItemDefinition.Create("disc", maxStackSize: 10);
+            var a = new TestItem(definition);
+            var b = new TestItem(definition);
 
             Assert.IsFalse(a.Equals(b));
             Assert.IsTrue(a.CanStackWith(b));

@@ -25,7 +25,8 @@ namespace GI.UnityToolkit.Items
     /// </remarks>
     public abstract class Item : IItemAttributes
     {
-        private readonly IItemAttributes _attributes;
+        public readonly ItemDefinition Definition;
+        
         private readonly Guid _instanceId;
         private readonly bool _isStackable;
 
@@ -45,43 +46,43 @@ namespace GI.UnityToolkit.Items
         public Guid? InstanceId => _isStackable ? null : _instanceId;
 
         /// <summary>
-        /// Constructs an item from its edit-time attributes.
+        /// Constructs an item from its edit-time definition.
         /// </summary>
-        /// <param name="attributes">The edit-time attributes this instance is built from.</param>
-        /// <exception cref="ArgumentNullException"><paramref name="attributes"/> is null.</exception>
-        protected Item(IItemAttributes attributes) : this(attributes, Guid.NewGuid())
+        /// <param name="definition">The edit-time definition this instance is built from.</param>
+        /// <exception cref="ArgumentNullException"><paramref name="definition"/> is null.</exception>
+        protected Item(ItemDefinition definition) : this(definition, Guid.NewGuid())
         {
         }
 
         /// <summary>
         /// Constructs an item with a known <see cref="InstanceId"/>, for restoring a saved item.
         /// </summary>
-        /// <param name="attributes">The edit-time attributes this instance is built from.</param>
+        /// <param name="definition">The edit-time definition this instance is built from.</param>
         /// <param name="instanceId">
         /// The identity to restore. Must not be <see cref="Guid.Empty"/>. Kept but not exposed while
         /// the item is stackable, since <see cref="InstanceId"/> is null then.
         /// </param>
-        /// <exception cref="ArgumentNullException"><paramref name="attributes"/> is null.</exception>
+        /// <exception cref="ArgumentNullException"><paramref name="definition"/> is null.</exception>
         /// <exception cref="ArgumentException"><paramref name="instanceId"/> is <see cref="Guid.Empty"/>.</exception>
-        protected Item(IItemAttributes attributes, Guid instanceId)
+        protected Item(ItemDefinition definition, Guid instanceId)
         {
-            _attributes = attributes ?? throw new ArgumentNullException(nameof(attributes));
+            Definition = definition ?? throw new ArgumentNullException(nameof(definition));
             if (instanceId == Guid.Empty) throw new ArgumentException("Instance id must not be empty.", nameof(instanceId));
             _instanceId = instanceId;
-            _isStackable = attributes.MaxStackSize > 1;
+            _isStackable = definition.MaxStackSize > 1;
         }
 
         /// <inheritdoc cref="IItemAttributes.UniqueId"/>
-        public string UniqueId => _attributes.UniqueId;
+        public string UniqueId => Definition.UniqueId;
 
         /// <inheritdoc cref="IItemAttributes.Name"/>
-        public string Name => _attributes.Name;
+        public string Name => Definition.Name;
 
         /// <inheritdoc cref="IItemAttributes.Description"/>
-        public string Description => _attributes.Description;
+        public string Description => Definition.Description;
 
         /// <inheritdoc cref="IItemAttributes.Icon"/>
-        public Sprite Icon => _attributes.Icon;
+        public Sprite Icon => Definition.Icon;
 
         /// <summary>
         /// Whether more than one unit may share a slot: true exactly when the attributes'
@@ -97,7 +98,7 @@ namespace GI.UnityToolkit.Items
         /// at runtime (stacks above a shrunken limit simply have no room left); a non-stackable item
         /// is always 1, even if its attributes later grow.
         /// </summary>
-        public int MaxStackSize => _isStackable ? Math.Max(1, _attributes.MaxStackSize) : 1;
+        public int MaxStackSize => _isStackable ? Math.Max(1, Definition.MaxStackSize) : 1;
 
         /// <summary>
         /// Whether this item may share an inventory slot with <paramref name="other"/>.
@@ -128,26 +129,24 @@ namespace GI.UnityToolkit.Items
     /// <summary>
     /// An <see cref="Item"/> that keeps a strongly typed reference to the attributes it was built from.
     /// </summary>
-    /// <typeparam name="T">
-    /// The attributes type. Constrained to <see cref="IItemAttributes"/> - deliberately NOT to a
-    /// project-specific definition type - so this assembly carries no dependency on project code or
-    /// any ScriptableObject base.
+    /// <typeparam name="TDef">
+    /// The definition type. Constrained to <see cref="ItemDefinition"/>, so this assembly carries no
+    /// dependency on project code. The definition passed to the constructor must be of this type.
     /// </typeparam>
-    public abstract class Item<T> : Item where T : class, IItemAttributes
+    public abstract class Item<TDef> : Item where TDef : ItemDefinition
     {
         /// <summary>
-        /// The typed attributes this item was built from. Never null.
+        /// The typed definition this item was built from. Never null.
         /// </summary>
-        public T Definition { get; }
+        public new TDef Definition => (TDef)base.Definition;
 
         /// <summary>
         /// Constructs an item from its typed edit-time definition.
         /// </summary>
-        /// <param name="definition">The typed attributes this instance is built from.</param>
+        /// <param name="definition">The typed definition this instance is built from.</param>
         /// <exception cref="ArgumentNullException"><paramref name="definition"/> is null.</exception>
-        protected Item(T definition) : base(definition)
+        protected Item(TDef definition) : base(definition)
         {
-            Definition = definition;
         }
 
         /// <summary>
@@ -156,9 +155,8 @@ namespace GI.UnityToolkit.Items
         /// </summary>
         /// <exception cref="ArgumentNullException"><paramref name="definition"/> is null.</exception>
         /// <exception cref="ArgumentException"><paramref name="instanceId"/> is <see cref="Guid.Empty"/>.</exception>
-        protected Item(T definition, Guid instanceId) : base(definition, instanceId)
+        protected Item(TDef definition, Guid instanceId) : base(definition, instanceId)
         {
-            Definition = definition;
         }
     }
 }

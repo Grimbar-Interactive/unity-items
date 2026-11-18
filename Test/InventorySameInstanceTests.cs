@@ -12,9 +12,9 @@ namespace GI.UnityToolkit.Items.Test
     {
         private static (TestItem First, TestItem Second) TwinsWithSameInstanceId(string uniqueId = "sword")
         {
-            var attributes = new FakeItemAttributes(uniqueId);
+            var definition = FakeItemDefinition.Create(uniqueId);
             var id = Guid.NewGuid();
-            return (new TestItem(attributes, id), new TestItem(attributes, id));
+            return (new TestItem(definition, id), new TestItem(definition, id));
         }
 
         [Test]

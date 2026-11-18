@@ -204,7 +204,7 @@ namespace GI.UnityToolkit.Items.Test
             var sword = AddSword(source);
             var linked = new LinkedInventory<TestItem>(source);
             linked.TryAdd(sword);
-            var restored = new TestItem(new FakeItemAttributes("sword"), sword.InstanceId.Value);
+            var restored = new TestItem(FakeItemDefinition.Create("sword"), sword.InstanceId.Value);
 
             using (source.BeginBatchUpdate())
             {
@@ -269,7 +269,7 @@ namespace GI.UnityToolkit.Items.Test
             var sword = AddSword(source);
             var linked = new LinkedInventory<TestItem>(source);
             linked.TryAdd(sword);
-            var restored = new TestItem(new FakeItemAttributes("sword"), sword.InstanceId.Value);
+            var restored = new TestItem(FakeItemDefinition.Create("sword"), sword.InstanceId.Value);
             using var recorder = new InventoryEventRecorder<TestItem>(linked);
 
             using (source.BeginBatchUpdate())

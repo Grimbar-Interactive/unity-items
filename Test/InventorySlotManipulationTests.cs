@@ -409,9 +409,9 @@ namespace GI.UnityToolkit.Items.Test
         public void MergeStacks_RespectsCanStackWithOverride()
         {
             var inventory = new Inventory<DurabilityTestItem>(2);
-            var attributes = new FakeItemAttributes("disc", maxStackSize: 10);
-            inventory.TryAdd(new DurabilityTestItem(attributes, 40), 1);
-            inventory.TryAdd(new DurabilityTestItem(attributes, 100), 1);
+            var definition = FakeItemDefinition.Create("disc", maxStackSize: 10);
+            inventory.TryAdd(new DurabilityTestItem(definition, 40), 1);
+            inventory.TryAdd(new DurabilityTestItem(definition, 100), 1);
 
             Assert.IsFalse(inventory.MergeStacks(0, 1));
         }

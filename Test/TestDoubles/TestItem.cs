@@ -4,11 +4,11 @@ namespace GI.UnityToolkit.Items.Test
 {
     internal class TestItem : Item
     {
-        public TestItem(IItemAttributes attributes) : base(attributes)
+        public TestItem(ItemDefinition definition) : base(definition)
         {
         }
 
-        public TestItem(IItemAttributes attributes, Guid instanceId) : base(attributes, instanceId)
+        public TestItem(ItemDefinition definition, Guid instanceId) : base(definition, instanceId)
         {
         }
     }

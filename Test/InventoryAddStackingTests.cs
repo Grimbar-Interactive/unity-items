@@ -160,10 +160,10 @@ namespace GI.UnityToolkit.Items.Test
         public void TryAdd_RespectsCanStackWithOverride_DifferentStateGetsOwnSlot()
         {
             var inventory = new Inventory<DurabilityTestItem>();
-            var attributes = new FakeItemAttributes("disc", maxStackSize: 10);
+            var definition = FakeItemDefinition.Create("disc", maxStackSize: 10);
 
-            inventory.TryAdd(new DurabilityTestItem(attributes, 40), 1);
-            inventory.TryAdd(new DurabilityTestItem(attributes, 100), 1);
+            inventory.TryAdd(new DurabilityTestItem(definition, 40), 1);
+            inventory.TryAdd(new DurabilityTestItem(definition, 100), 1);
 
             Assert.AreEqual(2, inventory.SlotCount);
         }

@@ -64,11 +64,11 @@ namespace GI.UnityToolkit.Items.Test
         [Test]
         public void TryAddAt_RestoresAFixedInventoryAtSavedPositions()
         {
-            var attributes = new FakeItemAttributes("sword");
+            var definition = FakeItemDefinition.Create("sword");
             var savedId = Guid.NewGuid();
             var inventory = new Inventory<TestItem>(6);
 
-            inventory.TryAddAt(4, new TestItem(attributes, savedId));
+            inventory.TryAddAt(4, new TestItem(definition, savedId));
             inventory.TryAddAt(1, TestItems.Stackable("potion", max: 10), 7);
 
             Assert.AreEqual(savedId, inventory[4].Item.InstanceId);
@@ -162,11 +162,11 @@ namespace GI.UnityToolkit.Items.Test
         [Test]
         public void TryAddAt_OccupiedSlot_ItemsThatRefuseToStack_Rejected()
         {
-            var attributes = new FakeItemAttributes("blade", maxStackSize: 10);
+            var definition = FakeItemDefinition.Create("blade", maxStackSize: 10);
             var inventory = new Inventory<DurabilityTestItem>(5);
-            inventory.TryAdd(new DurabilityTestItem(attributes, 100), 2);
+            inventory.TryAdd(new DurabilityTestItem(definition, 100), 2);
 
-            Assert.IsFalse(inventory.TryAddAt(0, new DurabilityTestItem(attributes, 50), 1));
+            Assert.IsFalse(inventory.TryAddAt(0, new DurabilityTestItem(definition, 50), 1));
             Assert.AreEqual(2, inventory[0].Quantity);
         }
 

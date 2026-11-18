@@ -92,6 +92,40 @@ namespace GI.UnityToolkit.Items.Test
         }
 
         [Test]
+        public void PlainDefinition_CreateItem_ReturnsTypedItemBuiltFromIt()
+        {
+            DefinitionTestItem item = _plain.CreateItem();
+
+            Assert.AreSame(_plain, item.Definition);
+        }
+
+        [Test]
+        public void PlainDefinition_UntypedCreateItem_ReturnsSameKindOfItem()
+        {
+            Item item = ((ItemDefinition)_plain).CreateItem();
+
+            Assert.IsInstanceOf<DefinitionTestItem>(item);
+            Assert.AreSame(_plain, item.Definition);
+        }
+
+        [Test]
+        public void StackableDefinition_CreateItem_ReturnsStackableItem()
+        {
+            var item = _stackable.CreateItem();
+
+            Assert.AreSame(_stackable, item.Definition);
+            Assert.IsTrue(item.IsStackable);
+            Assert.IsNull(item.InstanceId);
+        }
+
+        [Test]
+        public void CreateItem_EachCallReturnsNewInstance()
+        {
+            Assert.AreNotSame(_plain.CreateItem(), _plain.CreateItem());
+            Assert.AreNotEqual(_plain.CreateItem().InstanceId, _plain.CreateItem().InstanceId);
+        }
+
+        [Test]
         public void ItemFromStackableDefinition_IsStackableWithoutInstanceId()
         {
             var item = new DefinitionTestItem(_stackable);

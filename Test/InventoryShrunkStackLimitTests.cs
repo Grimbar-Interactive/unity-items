@@ -1,5 +1,4 @@
 using NUnit.Framework;
-using UnityEngine;
 
 namespace GI.UnityToolkit.Items.Test
 {
@@ -10,23 +9,14 @@ namespace GI.UnityToolkit.Items.Test
     /// </summary>
     public class InventoryShrunkStackLimitTests
     {
-        private sealed class MutableAttributes : IItemAttributes
-        {
-            public string UniqueId { get; set; }
-            public string Name => null;
-            public string Description => null;
-            public Sprite Icon => null;
-            public int MaxStackSize { get; set; }
-        }
-
         [Test]
         public void RemainingSpace_WhenLimitShrinksBelowQuantity_IsZeroNotNegative()
         {
-            var attributes = new MutableAttributes { UniqueId = "potion", MaxStackSize = 10 };
+            var definition = FakeItemDefinition.Create("potion", 10);
             var inventory = new Inventory<TestItem>(2);
-            inventory.TryAdd(new TestItem(attributes), 8);
+            inventory.TryAdd(new TestItem(definition), 8);
 
-            attributes.MaxStackSize = 5;
+            definition.SetMaxStackSize(5);
 
             Assert.AreEqual(0, inventory[0].RemainingSpace);
             Assert.IsTrue(inventory[0].IsFull);
@@ -35,22 +25,22 @@ namespace GI.UnityToolkit.Items.Test
         [Test]
         public void GetFreeSpaceFor_WithOverfullStack_CountsOnlyGenuineFreeSpace()
         {
-            var attributes = new MutableAttributes { UniqueId = "potion", MaxStackSize = 10 };
+            var definition = FakeItemDefinition.Create("potion", 10);
             var inventory = new Inventory<TestItem>(2);
-            inventory.TryAdd(new TestItem(attributes), 8);
+            inventory.TryAdd(new TestItem(definition), 8);
 
-            attributes.MaxStackSize = 5;
+            definition.SetMaxStackSize(5);
 
             // The overfull stack contributes nothing; the single free slot holds 5.
-            Assert.AreEqual(5, inventory.GetFreeSpaceFor(new TestItem(attributes)));
+            Assert.AreEqual(5, inventory.GetFreeSpaceFor(new TestItem(definition)));
         }
 
         private static Inventory<TestItem> OverfullInventory()
         {
-            var attributes = new MutableAttributes { UniqueId = "potion", MaxStackSize = 10 };
+            var definition = FakeItemDefinition.Create("potion", 10);
             var inventory = new Inventory<TestItem>(3);
-            inventory.TryAddAt(1, new TestItem(attributes), 8);
-            attributes.MaxStackSize = 5;
+            inventory.TryAddAt(1, new TestItem(definition), 8);
+            definition.SetMaxStackSize(5);
             return inventory;
         }
 
@@ -100,12 +90,12 @@ namespace GI.UnityToolkit.Items.Test
         [Test]
         public void LimitShrinksToOne_StackableItemStaysStackableAndFungible()
         {
-            var attributes = new MutableAttributes { UniqueId = "potion", MaxStackSize = 10 };
+            var definition = FakeItemDefinition.Create("potion", 10);
             var inventory = new Inventory<TestItem>(3);
-            var item = new TestItem(attributes);
+            var item = new TestItem(definition);
             inventory.TryAdd(item, 15); // one reference in two slots
 
-            attributes.MaxStackSize = 1;
+            definition.SetMaxStackSize(1);
 
             Assert.IsTrue(item.IsStackable);
             Assert.IsNull(item.InstanceId);
@@ -119,13 +109,13 @@ namespace GI.UnityToolkit.Items.Test
         [Test]
         public void LimitGrowsFromOne_NonStackableItemStaysNonStackable()
         {
-            var attributes = new MutableAttributes { UniqueId = "sword", MaxStackSize = 1 };
+            var definition = FakeItemDefinition.Create("sword", 1);
             var inventory = new Inventory<TestItem>(2);
-            var item = new TestItem(attributes);
+            var item = new TestItem(definition);
             inventory.TryAdd(item);
             var instanceId = item.InstanceId;
 
-            attributes.MaxStackSize = 5;
+            definition.SetMaxStackSize(5);
 
             Assert.IsFalse(item.IsStackable);
             Assert.AreEqual(1, item.MaxStackSize);
@@ -137,14 +127,14 @@ namespace GI.UnityToolkit.Items.Test
         [Test]
         public void LimitShrinksToOne_LinkedInventoryStillTrimsByQuantity()
         {
-            var attributes = new MutableAttributes { UniqueId = "potion", MaxStackSize = 10 };
+            var definition = FakeItemDefinition.Create("potion", 10);
             var source = new Inventory<TestItem>();
-            var item = new TestItem(attributes);
+            var item = new TestItem(definition);
             source.TryAdd(item, 15);
             var linked = new LinkedInventory<TestItem>(source);
             linked.TryAdd(item, 15); // slots of 10 and 5
 
-            attributes.MaxStackSize = 1;
+            definition.SetMaxStackSize(1);
             source.TryRemove("potion", 3);
 
             Assert.AreEqual(12, linked.GetQuantity("potion"));

@@ -7,9 +7,10 @@ A slot-based item and inventory system. Everything lives in `GI.UnityToolkit.Ite
 | Type | Role |
 | --- | --- |
 | `IItemAttributes` | Read-only, edit-time description of a kind of item (`UniqueId`, `Name`, `Description`, `Icon`, `MaxStackSize`). |
-| `ItemDefinition` | ScriptableObject base class implementing `IItemAttributes`. Subclass it for your game's item data. Items built from it never stack. |
+| `ItemDefinition` | ScriptableObject base class implementing `IItemAttributes`. Every `Item` is built from one. Subclass it for your game's item data. Items built from it never stack. |
+| `ItemDefinition<TItem>` | `ItemDefinition` that knows which `Item` subclass it builds. Implement `Construct()` and call `CreateItem()` to get a typed item. |
 | `StackableItemDefinition` | `ItemDefinition` with a serialized `MaxStackSize` (default 64, minimum 1). Subclass it for items that stack; a value of 1 opts an item out of stacking. |
-| `Item` / `Item<T>` | Runtime instance built from attributes. Carries per-instance state, **not** quantity. Non-stackable items also carry an identity (`InstanceId`). |
+| `Item` / `Item<TDef>` | Runtime instance built from an `ItemDefinition`, exposed as `Definition` (typed in `Item<TDef>`, where `TDef : ItemDefinition`). Carries per-instance state, **not** quantity. Non-stackable items also carry an identity (`InstanceId`). |
 | `ItemStack<TItem>` | One slot: an item plus a quantity. Only the inventory mutates it. |
 | `Inventory<TItem>` | The container. Owns quantity, stacking, events. |
 
@@ -139,7 +140,7 @@ public class DiscBag : Inventory<MyItem>
 `Inventory` and `ItemStack` are intentionally **not** Unity-serializable. Persist through your own DTO:
 
 - Save one record per occupied slot: slot index, `UniqueId`, quantity, and `InstanceId` (null for stackable items, which have none).
-- Restore by looking up the `ItemDefinition` from the saved `UniqueId` and constructing the item. Use the `Item(attributes, instanceId)` constructor to bring back a saved `InstanceId` for non-stackable items.
+- Restore by looking up the `ItemDefinition` from the saved `UniqueId` and constructing the item. `CreateItem()` always generates a new `InstanceId`, so use the `Item(definition, instanceId)` constructor to bring back a saved `InstanceId` for non-stackable items.
 - **Fixed-size inventories:** call `TryAddAt(slotIndex, item, quantity)` for each record. Items return to exactly their saved slots, and a failed call (bad data, a definition that changed) leaves the slot untouched and returns false.
 - **Unbounded inventories:** there are no empty slots to address, so call `TryAdd` for each record in saved order. Slot order is rebuilt exactly.
 
@@ -160,3 +161,41 @@ foreach (var entry in save.Slots)
 Two definitions sharing a `UniqueId` are treated as one kind everywhere: they stack together and collide in saves. The editor assembly (`GrimbarInteractive.UnityToolkit.Items.Editor`) checks for this automatically after any `ItemDefinition` asset is created, duplicated, saved or moved, and warns once per duplicated id listing every asset involved (click the warning to ping the first). Run it on demand from **Grimbar Interactive > Items > Validate Unique Ids**, or call `ItemDefinitionValidator.FindDuplicateUniqueIds` from your own tooling or tests.
 
 `ItemDefinition.OnValidate` is `protected virtual` in every build, so a subclass can override it (calling the base) without wrapping the override in `#if UNITY_EDITOR`.
+
+## Creating items from definitions
+
+An `Item` is always constructed from an `ItemDefinition`; the constructor throws `ArgumentNullException` for null, and no longer accepts a plain `IItemAttributes`. The definition is available as `item.Definition`.
+
+Derive your definition from `ItemDefinition<TItem>` to let it build its own items:
+
+```csharp
+public class PotionItem : Item<PotionDefinition>
+{
+    public PotionItem(PotionDefinition definition) : base(definition) { }
+    public PotionItem(PotionDefinition definition, Guid instanceId) : base(definition, instanceId) { }
+}
+
+[CreateAssetMenu(menuName = "Items/Potion")]
+public class PotionDefinition : ItemDefinition<PotionItem>
+{
+    protected override PotionItem Construct() => new PotionItem(this);
+}
+
+PotionItem potion = potionDefinition.CreateItem();   // typed
+Item generic = ((ItemDefinition)potionDefinition).CreateItem();   // untyped, for code that only knows ItemDefinition
+```
+
+Each `CreateItem()` call returns a new item. `Item<TDef>` casts `Definition` to `TDef`, so build it from a definition of that exact type.
+
+`StackableItemDefinition` has no generic variant. To make a stackable definition build items, override the untyped hook instead:
+
+```csharp
+public class AmmoDefinition : StackableItemDefinition
+{
+    protected override Item CreateItemUntyped() => new AmmoItem(this);
+}
+```
+
+## Testing
+
+Because items need a real `ItemDefinition`, tests create ScriptableObjects with `ScriptableObject.CreateInstance` and must destroy them (`Object.DestroyImmediate`) afterwards. The package's own tests do this through `FakeItemDefinition` (`Test/TestDoubles`), which tracks every instance it creates and removes them after each test. It also lets a test change `MaxStackSize` at runtime to exercise shrunk stack limits.

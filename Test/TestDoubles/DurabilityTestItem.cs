@@ -2,7 +2,7 @@ namespace GI.UnityToolkit.Items.Test
 {
     internal sealed class DurabilityTestItem : Item
     {
-        public DurabilityTestItem(IItemAttributes attributes, int durability) : base(attributes)
+        public DurabilityTestItem(ItemDefinition definition, int durability) : base(definition)
         {
             Durability = durability;
         }

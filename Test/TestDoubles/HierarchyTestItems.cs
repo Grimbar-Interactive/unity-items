@@ -7,32 +7,32 @@ namespace GI.UnityToolkit.Items.Test
     //   Item -> OtherTestItem (unrelated branch)
     internal class BasicTestItem : Item
     {
-        public BasicTestItem(IItemAttributes attributes) : base(attributes)
+        public BasicTestItem(ItemDefinition definition) : base(definition)
         {
         }
 
-        public BasicTestItem(IItemAttributes attributes, Guid instanceId) : base(attributes, instanceId)
+        public BasicTestItem(ItemDefinition definition, Guid instanceId) : base(definition, instanceId)
         {
         }
     }
 
     internal class UseTestItem : BasicTestItem
     {
-        public UseTestItem(IItemAttributes attributes) : base(attributes)
+        public UseTestItem(ItemDefinition definition) : base(definition)
         {
         }
     }
 
     internal class SpecialUseTestItem : UseTestItem
     {
-        public SpecialUseTestItem(IItemAttributes attributes) : base(attributes)
+        public SpecialUseTestItem(ItemDefinition definition) : base(definition)
         {
         }
     }
 
     internal class OtherTestItem : Item
     {
-        public OtherTestItem(IItemAttributes attributes) : base(attributes)
+        public OtherTestItem(ItemDefinition definition) : base(definition)
         {
         }
     }
@@ -47,12 +47,12 @@ namespace GI.UnityToolkit.Items.Test
 
     internal static class HierarchyItems
     {
-        public static BasicTestItem Basic(string id = "basic", int max = 1) => new(new FakeItemAttributes(id, max));
+        public static BasicTestItem Basic(string id = "basic", int max = 1) => new(FakeItemDefinition.Create(id, max));
 
-        public static UseTestItem Use(string id = "use", int max = 1) => new(new FakeItemAttributes(id, max));
+        public static UseTestItem Use(string id = "use", int max = 1) => new(FakeItemDefinition.Create(id, max));
 
-        public static SpecialUseTestItem Special(string id = "special", int max = 1) => new(new FakeItemAttributes(id, max));
+        public static SpecialUseTestItem Special(string id = "special", int max = 1) => new(FakeItemDefinition.Create(id, max));
 
-        public static OtherTestItem Other(string id = "other", int max = 1) => new(new FakeItemAttributes(id, max));
+        public static OtherTestItem Other(string id = "other", int max = 1) => new(FakeItemDefinition.Create(id, max));
     }
 }
