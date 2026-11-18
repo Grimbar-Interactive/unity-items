@@ -10,7 +10,7 @@ namespace GI.UnityToolkit.Items.Test
         protected override DefinitionTestItem Construct() => new DefinitionTestItem(this);
     }
 
-    internal sealed class StackableTestDefinition : StackableItemDefinition
+    internal sealed class StackableTestDefinition : StackableItemDefinition<DefinitionTestItem>
     {
         public void RunOnValidate() => OnValidate();
 
@@ -19,8 +19,8 @@ namespace GI.UnityToolkit.Items.Test
         /// </summary>
         public void SetMaxStackSize(int value) =>
             JsonUtility.FromJsonOverwrite($"{{\"maxStackSize\":{value}}}", this);
-
-        protected override Item CreateItemUntyped() => new DefinitionTestItem(this);
+        
+        protected override DefinitionTestItem Construct() => new(this);
     }
 
     internal sealed class DefinitionTestItem : Item<ItemDefinition>

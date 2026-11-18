@@ -15,7 +15,7 @@ namespace GI.UnityToolkit.Items.Test
         [TestCase(typeof(Item))]
         [TestCase(typeof(IItemAttributes))]
         [TestCase(typeof(ItemDefinition))]
-        [TestCase(typeof(StackableItemDefinition))]
+        [TestCase(typeof(StackableItemDefinition<>))]
         [TestCase(typeof(ItemStack<>))]
         [TestCase(typeof(Inventory<>))]
         [TestCase(typeof(InventoryCollection))]

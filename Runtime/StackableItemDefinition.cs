@@ -9,7 +9,7 @@ namespace GI.UnityToolkit.Items
     /// stack limit of at least 1. A limit of 1 means items of that definition do not stack, so
     /// inheritors can let individual items opt out of stacking.
     /// </summary>
-    public abstract class StackableItemDefinition : ItemDefinition
+    public abstract class StackableItemDefinition<TItem> : ItemDefinition<TItem> where TItem : Item
     {
         /// <summary>
         /// The smallest stack limit a definition may have. A limit of 1 makes the definition

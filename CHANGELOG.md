@@ -3,6 +3,10 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [1.4.1] - 2026-11-18
+### Changed
+- `StackableItemDefinition` is now generic and inherits from `ItemDefinition<TItem>`.
+
 ## [1.4.0] - 2026-11-18
 ### Added
 - `ItemDefinition.CreateItem()` and the `ItemDefinition<TItem>` base class: implement `Construct()` and the definition builds typed `Item` instances. Other definitions (for example `StackableItemDefinition` subclasses) implement `CreateItemUntyped()`.
